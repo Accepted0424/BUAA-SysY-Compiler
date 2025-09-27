@@ -1,0 +1,23 @@
+#include <stdio.h>
+
+int getint() {
+    int t;
+    scanf("%d",&t);
+    while(getchar()!='\n');
+    return t;
+}
+
+int cal(int x, int y[]) {
+    return x + y[0];
+}
+
+int main() {
+    printf("23373112");
+
+    int a = +1;
+    int b[5] = {1,2,3,4,5};
+
+    cal(a, b);
+
+    for (;;a=b[2]) { break; }
+}

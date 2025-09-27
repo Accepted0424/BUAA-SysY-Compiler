@@ -1,0 +1,38 @@
+#include <stdio.h>
+
+int getint() {
+    int t;
+    scanf("%d",&t);
+    while(getchar()!='\n');
+    return t;
+}
+
+const int a = 114514;
+const int arr[5] = {1,2,3,4,5};
+
+int cal(int x, int y) {
+    return x + y;
+}
+
+void my_log(int level, int code) {
+    printf("Log level: %d, code: %d\n", level, code);
+}
+
+int main() {
+    printf("23373112");
+
+    int b = cal(a, 1) - 114513;
+    int i = 0, k = (1 + 1) * 2;
+
+    for (i = 0; i < 10; i=i+1) {
+        if (i > 5 || cal(5, 5) == 100) {
+            break;
+        } else {
+            if (i != 3 && 7 == 8) {
+                continue;
+            }
+            my_log(i, cal(i, a));
+            continue;
+        }
+    }
+}

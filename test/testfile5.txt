@@ -1,0 +1,22 @@
+#include <stdio.h>
+
+int getint() {
+    int t;
+    scanf("%d",&t);
+    while(getchar()!='\n');
+    return t;
+}
+
+const int a = 1 - 1, b = 2 * 2, c = 3 / 3, d = 4 % 4;
+
+int main() {
+    printf("23373112");
+
+    static int i = 1 + 1;
+    static int j = 2 - 2, k = 1;
+    int p;
+
+    // for loop tests
+    for (i=0;b <= 2;) {}
+    for (i=0;;i=i+1) { break; }
+}

@@ -1,0 +1,31 @@
+#include <stdio.h>
+
+int getint() {
+    int t;
+    scanf("%d",&t);
+    while(getchar()!='\n');
+    return t;
+}
+
+const int a = 114514;
+
+void cal(int x) {
+    return;
+}
+
+void nop() {
+    return;
+}
+
+int main() {
+    printf("23373112");
+
+    int b[2] = {-1,2};
+    int c[3];
+
+    cal(a);
+
+    for (;1 >= 2;b[0]=1, b[1]=2)  {}
+
+    return 0;
+}
