@@ -178,7 +178,7 @@ void Lexer::next(Token &token) {
         if (!lexNeq(token, content))
             token = Token(Token::NOT, content, lineno_);
     } else if (ch == '<') {
-        if (!lexEql(token, content))
+        if (!lexLeq(token, content))
             token = Token(Token::LSS, content, lineno_);
     } else if (ch == '>') {
         if (!lexGeq(token, content))
