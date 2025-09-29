@@ -147,6 +147,17 @@ bool Lexer::lexGeq(Token &token, std::string content) {
     return false;
 }
 
+bool Lexer::lexSingleLineComment(Token &token, std::string content) {
+    char ch = getChar();
+    if (ch == '/') {
+        while (ch != '\n') {
+            ch = getChar();
+        }
+        return true;
+    }
+    return false;
+}
+
 void Lexer::next(Token &token) {
     std::string content;
 
@@ -179,6 +190,7 @@ void Lexer::next(Token &token) {
         lineno_++;
         return next(token);
     } else if (ch == '/') {
+        if (lexSingleLineComment(token, content)) return next(token);
         token = Token(Token::DIV, content, lineno_);
     } else if (ch == '(') {
         token = Token(Token::LPARENT, content, lineno_);
