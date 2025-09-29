@@ -147,7 +147,7 @@ bool Lexer::lexGeq(Token &token, std::string content) {
     return false;
 }
 
-bool Lexer::lexSingleLineComment(Token &token, std::string content) {
+bool Lexer::lexSingleLineComment() {
     char ch = getChar();
     if (ch == '/') {
         while (ch != '\n') {
@@ -155,6 +155,29 @@ bool Lexer::lexSingleLineComment(Token &token, std::string content) {
         }
         return true;
     }
+    ungetChar();
+    return false;
+}
+
+bool Lexer::lexBlockComment() {
+    char ch = getChar();
+    if (ch == '*') {
+        ch = getChar();
+        while (true) {
+            if (ch == EOF) {
+                return false; // 注释没闭合
+            }
+            if (ch == '*') {
+                ch = getChar();
+                if (ch == '/') {
+                    return true;  // 找到 "*/"
+                }
+            } else {
+                ch = getChar();
+            }
+        }
+    }
+    ungetChar();
     return false;
 }
 
@@ -190,7 +213,8 @@ void Lexer::next(Token &token) {
         lineno_++;
         return next(token);
     } else if (ch == '/') {
-        if (lexSingleLineComment(token, content)) return next(token);
+        if (lexSingleLineComment() || lexBlockComment())
+            return next(token);
         token = Token(Token::DIV, content, lineno_);
     } else if (ch == '(') {
         token = Token(Token::LPARENT, content, lineno_);

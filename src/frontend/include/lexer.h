@@ -40,5 +40,7 @@ private:
 
     bool lexGeq(Token &token, std::string content);
 
-    bool lexSingleLineComment(Token &token, std::string content);
+    bool lexSingleLineComment();
+
+    bool lexBlockComment();
 };
