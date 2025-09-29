@@ -185,9 +185,9 @@ void Lexer::next(Token &token) {
     } else if (ch == ')') {
         token = Token(Token::RPARENT, content, lineno_);
     } else if (ch == '[') {
-        token = Token(Token::LBRACE, content, lineno_);
+        token = Token(Token::LBRACK, content, lineno_);
     } else if (ch == ']') {
-        token = Token(Token::RBRACE, content, lineno_);
+        token = Token(Token::RBRACK, content, lineno_);
     } else if (ch == '{') {
         token = Token(Token::LBRACE, content, lineno_);
     } else if (ch == '}') {
