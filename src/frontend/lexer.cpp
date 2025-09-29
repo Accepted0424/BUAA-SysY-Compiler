@@ -99,6 +99,7 @@ bool Lexer::lexOrExpr(Token &token, std::string content) {
         return true;
     }
     ungetChar();
+    ErrorReporter::error(lineno_, ERR_ILLEGAL_SYMBOL);
     LOG_ERROR(lineno_, "[Lexer] Unterminated OrExpr");
     return false;
 }
