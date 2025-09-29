@@ -93,7 +93,7 @@ bool Lexer::lexAndExpr(Token &token, std::string content) {
 
 bool Lexer::lexOrExpr(Token &token, std::string content) {
     char ch = getChar();
-    if (ch != '|') {
+    if (ch == '|') {
         content.append(1, ch);
         token = Token(Token::OR, content, lineno_);
         return true;
