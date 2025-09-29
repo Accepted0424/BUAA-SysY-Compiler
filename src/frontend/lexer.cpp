@@ -214,6 +214,8 @@ void Lexer::next(Token &token) {
         token = Token(Token::MULT, content, lineno_);
     } else if (ch == ',') {
         token = Token(Token::COMMA, content, lineno_);
+    } else if (ch == '%') {
+        token = Token(Token::MOD, content, lineno_);
     } else if (isblank(ch)) {
         return next(token);
     } else if (ch == EOF) {
