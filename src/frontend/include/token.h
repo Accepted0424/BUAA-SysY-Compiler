@@ -53,11 +53,15 @@ struct Token {
 #undef X
     } type;
 
-    std::unordered_map<TokenType, std::string> type2string {
+    static std::unordered_map<TokenType, std::string> type2String {
 #define X(a, b) {TokenType::a, #a},
         TOKEN_TYPE
 #undef X
     };
+
+    static std::string toString(TokenType t) {
+        return type2String.at(t);
+    }
 
     std::string content;
     int lineno;

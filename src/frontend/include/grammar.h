@@ -4,6 +4,8 @@
 #include <string>
 #include <iostream>
 
+#include "ast.h"
+
 #define LETTERS \
 {"a"},{"b"},{"c"},{"d"},{"e"},{"f"},{"g"},{"h"},{"i"},{"j"},{"k"},{"l"},{"m"}, \
 {"n"},{"o"},{"p"},{"q"},{"r"},{"s"},{"t"},{"u"},{"v"},{"w"},{"x"},{"y"},{"z"}, \
@@ -62,49 +64,8 @@ struct Grammar {
     }
 };
 
-struct Ident : Grammar {
-    Ident() {
-        nonTerminals = {"identifier-nondigit", "digit"};
-        terminals = { LETTERS, DIGITS, "_"};
-        startSymbol = "identifier";
+struct CompUnit : Grammar {
+    CompUnit() {
 
-        addRule("identifier", {{"identifier-nondigit"}, {"identifier", "identifier-nondigit"}, {"identifier", "digit"}});
-        ADD_LETTERS_RULE;
-        ADD_DIGITS_RULE;
-    }
-};
-
-struct IntConst : Grammar {
-    IntConst() {
-        nonTerminals = {"decimal-const", "nonzero-digit"};
-        terminals = { DIGITS, "_"};
-        startSymbol = "integer-const";
-
-        addRule("integer-const", {{"decimal-const"}, {"0"}});
-        addRule("decimal-const", {{"nonzero-digit"}, {"decimal-const", "digit"}});
-        addRule("nonzero-digits", {{"1"}, {"2"}, {"3"}, {"4"}, {"5"}, {"6"}, {"7"}, {"8"}, {"9"}});
-        ADD_DIGITS_RULE;
-    }
-};
-
-struct StringConst : Grammar {
-    StringConst() {
-        nonTerminals = {"StringConst", "Char", "FormatChar", "NormalChar", "Char_rep"};
-        terminals = { LETTERS, DIGITS, " ", "!", "(", ")", }; // Todo
-        startSymbol = "String-const";
-
-        addRule("StringConst", {{"\"", CURLY_BRACKETS("Char"), "\""}});
-        CURLY_BRACKETS_TO_BNF("Char");
-        addRule("Char", {{"FormatChar"}, {"NormalChar"}});
-        addRule("NormalChar", {
-            DIGITS, LETTERS,
-            {" "}, {"!"}, // 32, 33
-            {"("}, {")"}, {"*"}, { "+"}, {","}, {"-"}, {"."}, {"/"}, // 40–47
-            {":"}, {";"}, {"<"}, {"="}, {">"}, {"?"}, {"@"}, // 58–64
-            {"["}, {"]"}, {"^"}, {"_"}, {"`"}, // 91–96 （注意 92 '\' 已特殊处理）
-            {"{"}, {"|"}, {"}"}, {"~"}, // 123–126
-            {"\\n"} // 特殊：92 '\' + 'n'
-        });
-        addRule("FormatChar", {{"%d"}});
     }
 };
