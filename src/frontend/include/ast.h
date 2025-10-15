@@ -3,6 +3,7 @@
 #include <iostream>
 
 namespace AstNode {
+    struct ConstExp;
     struct AddExp;
 
     struct Node {
@@ -45,7 +46,14 @@ namespace AstNode {
     };
 
     struct ConstInitVal : Node {
+        enum Kind {
+            EXP,
+            LIST
+        } kind;
+        std::unique_ptr<ConstExp> exp;
+        std::vector<std::unique_ptr<ConstExp>> list;
 
+        void print(std::ostream &out) override;
     };
 
     struct Exp : Node {
@@ -160,6 +168,13 @@ namespace AstNode {
     };
 
     struct InitVal : Node {
+        enum Kind {
+            EXP,
+            LIST
+        } kind;
+
+        std::unique_ptr<Exp> exp;
+        std::vector<std::unique_ptr<Exp>> list;
 
         void print(std::ostream &out) override;
     };
@@ -184,7 +199,17 @@ namespace AstNode {
         void print(std::ostream &out) override;
     };
 
+    struct Stmt : Node {
+
+        void print(std::ostream &out) override;
+    };
+
     struct BlockItem : Node {
+        enum Kind {
+            DECL,
+            STMT
+        } kind;
+
         std::optional<std::unique_ptr<Decl>> decl;
         std::optional<std::unique_ptr<Stmt>> stmt;
 

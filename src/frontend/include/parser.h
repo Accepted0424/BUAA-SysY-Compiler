@@ -74,7 +74,7 @@ private:
 
     bool parseStmt();
 
-    bool parseBlockItem();
+    std::unique_ptr<BlockItem> parseBlockItem();
 
     std::unique_ptr<Block> parseBlock();
 

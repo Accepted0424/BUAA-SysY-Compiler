@@ -383,7 +383,7 @@ std::unique_ptr<AddExp> Parser::parseAddExp() {
 
         auto mulExp = parseMulExp();
 
-        addExp->rest.push_back({op, std::move(mulExp)});
+        addExp->rest.emplace_back(op, std::move(mulExp));
     }
 
     return addExp;
@@ -398,10 +398,39 @@ std::unique_ptr<ConstExp> Parser::parseConstExp() {
     constExp->lineno = token_.lineno;
 
     constExp->addExp = parseAddExp();
+
+    return constExp;
 }
 
+/**
+ * @brief 解析`常量初值`
+ * @note ConstExp | '{' [ ConstExp { ',' ConstExp } ] '}'
+ */
 std::unique_ptr<ConstInitVal> Parser::parseConstInitVal() {
-    // TODO
+    auto constInitVal = std::make_unique<ConstInitVal>();
+    constInitVal->lineno = token_.lineno;
+
+    if (is(Token::LBRACE)) {
+        match(Token::LBRACE);
+
+        constInitVal->kind = ConstInitVal::LIST;
+
+        if (!is(Token::RBRACE)) {
+            constInitVal->list.push_back(parseConstExp());
+
+            while (is(Token::COMMA)) {
+                match(Token::COMMA);
+                constInitVal->list.push_back(parseConstExp());
+            }
+        }
+
+        match(Token::RBRACE);
+    } else {
+        constInitVal->kind = ConstInitVal::EXP;
+        constInitVal->exp = parseConstExp();
+    }
+
+    return constInitVal;
 }
 
 /**
@@ -409,7 +438,30 @@ std::unique_ptr<ConstInitVal> Parser::parseConstInitVal() {
  * @note Exp | '{' [ Exp { ',' Exp } ] '}'
  */
 std::unique_ptr<InitVal> Parser::parseInitVal() {
-    // TODO
+    auto initVal = std::make_unique<InitVal>();
+    initVal->lineno = token_.lineno;
+
+    if (is(Token::LBRACE)) {
+        match(Token::LBRACE);
+
+        initVal->kind = InitVal::LIST;
+
+        if (!is(Token::RBRACE)) {
+            initVal->list.push_back(parseExp());
+
+            while (is(Token::COMMA)) {
+                match(Token::COMMA);
+                initVal->list.push_back(parseExp());
+            }
+        }
+
+        match(Token::RBRACE);
+    } else {
+        initVal->kind = InitVal::EXP;
+        initVal->exp = parseExp();
+    }
+
+    return initVal;
 }
 
 /**
@@ -473,11 +525,29 @@ bool Parser::parseStmt() {
 }
 
 /**
+ * @brief 解析`语句块项`
+ * @note Decl | Stmt
+ */
+std::unique_ptr<BlockItem> Parser::parseBlockItem() {
+
+}
+
+/**
  * @brief 解析`语句块`
  * @note '{' { BlockItem } '}'
  */
 std::unique_ptr<Block> Parser::parseBlock() {
+    auto block = std::make_unique<Block>();
 
+    match(Token::LBRACE);
+
+    while (!is(Token::RBRACE)) {
+        block->blockItems.push_back(parseBlockItem());
+    }
+
+    match(Token::RBRACE);
+
+    return block;
 }
 
 /**
