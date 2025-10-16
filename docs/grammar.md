@@ -13,8 +13,15 @@ InitVal → Exp | '{' [ Exp { ',' Exp } ] '}'
     FIRST(MainFuncDef) = {'int'}
 ```
 ```text
-FIRST('Exp') = {'ident', '(', 'digits', '+', '-', '!'}
+LVal → Ident ['[' Exp ']']
 
+Exp → AddExp
+AddExp → MulExp | AddExp ('+' | '−') MulExp
+MulExp → UnaryExp | MulExp ('*' | '/' | '%') UnaryExp
+UnaryExp → PrimaryExp | Ident '(' [FuncRParams] ')' | UnaryOp UnaryExp
+PrimaryExp → '(' Exp ')' | LVal | Number
+
+FIRST('Exp') = {'ident', '(', 'digits', '+', '-', '!'}
 FIRST(LVal) = {Ident}
 FIRST(Exp) = {'Exp', ';'}
 FIRST(Block) = {'{'}

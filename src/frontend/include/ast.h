@@ -41,7 +41,7 @@ namespace AstNode {
     };
 
     struct Btype : Node {
-        std::unique_ptr<std::string> type;
+        std::string type;
 
         // void print(std::ostream &out) override;
     };

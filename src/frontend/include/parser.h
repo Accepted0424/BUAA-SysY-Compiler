@@ -23,7 +23,9 @@ public:
 private:
     Lexer &lexer_;
 
-    Token last_, token_, lookahead_;
+    bool has_unget_ = false;
+
+    Token last_, cur_, lookahead_, last_lookahead_;
 
     std::optional<std::reference_wrapper<std::ofstream>> out_;
 
@@ -51,11 +53,15 @@ private:
 
     std::unique_ptr<Exp> parseExp();
 
+    std::unique_ptr<Exp> parseExp(std::unique_ptr<LVal> lval);
+
     std::unique_ptr<LVal> parseLVal();
 
     std::unique_ptr<Number> parseNumber();
 
     std::unique_ptr<PrimaryExp> parsePrimaryExp();
+
+    std::unique_ptr<PrimaryExp> parsePrimaryExp(std::unique_ptr<LVal> lval);
 
     std::unique_ptr<UnaryOp> parseUnaryOp();
 
@@ -63,9 +69,15 @@ private:
 
     std::unique_ptr<UnaryExp> parseUnaryExp();
 
+    std::unique_ptr<UnaryExp> parseUnaryExp(std::unique_ptr<LVal> lval);
+
     std::unique_ptr<MulExp> parseMulExp();
 
+    std::unique_ptr<MulExp> parseMulExp(std::unique_ptr<LVal> lval);
+
     std::unique_ptr<AddExp> parseAddExp();
+
+    std::unique_ptr<AddExp> parseAddExp(std::unique_ptr<LVal> lval);
 
     std::unique_ptr<ConstExp> parseConstExp();
 

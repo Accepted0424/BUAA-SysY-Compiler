@@ -10,39 +10,53 @@ void Parser::printNode(std::string node) {
 }
 
 void Parser::getToken() {
-    last_ = token_;
-    token_ = lookahead_;
+    if (has_unget_) {
+        has_unget_ = false;
+        cur_ = lookahead_;
+        lookahead_ = last_lookahead_;
+        return;
+    }
+
+    last_ = cur_;
+    cur_ = lookahead_;
     lexer_.next(lookahead_);
+    last_lookahead_ = lookahead_;
 
     LOG_DEBUG(last_.lineno, "last_: " + Token::toString(last_));
-    LOG_DEBUG(token_.lineno, "token_: " + Token::toString(token_));
+    LOG_DEBUG(cur_.lineno, "token_: " + Token::toString(cur_));
     LOG_DEBUG(lookahead_.lineno, "lookahead_: " + Token::toString(lookahead_));
 }
 
+/**
+ * @brief 回退一个token
+ * @notes 仅能连续回退一次
+ */
 void Parser::ungetToken() {
-    lookahead_ = token_;
+    has_unget_ = true;
+    lookahead_ = cur_;
+    cur_ = last_;
 }
 
 bool Parser::match(Token::TokenType expected) {
-    if (token_.type == expected) {
+    if (cur_.type == expected) {
         if (out_) {
-            std::cout << Token::toString(token_) << " " << token_.content << std::endl;
-            out_->get() << Token::toString(token_) << " " << token_.content << std::endl;
+            std::cout << Token::toString(cur_) << " " << cur_.content << std::endl;
+            out_->get() << Token::toString(cur_) << " " << cur_.content << std::endl;
         }
         getToken();
         return true;
     }
-    ErrorReporter::error(token_.lineno, "[Parser] unexpected token: " + token_.content + ", expected: " + Token::toString(expected));
+    ErrorReporter::error(cur_.lineno, "[Parser] unexpected token: " + cur_.content + ", expected: " + Token::toString(expected));
     return false;
 }
 
 bool Parser::is(Token::TokenType type) {
-    LOG_DEBUG(token_.lineno, "Check " + Token::toString(type));
-    return token_.type == type;
+    LOG_DEBUG(cur_.lineno, "Check " + Token::toString(type));
+    return cur_.type == type;
 }
 
 bool Parser::is(Token::TokenType type, Token::TokenType ahead_type) {
-    return token_.type == type && lookahead_.type == ahead_type;
+    return cur_.type == type && lookahead_.type == ahead_type;
 }
 
 std::unique_ptr<CompUnit> Parser::parse() {
@@ -55,9 +69,9 @@ std::unique_ptr<CompUnit> Parser::parse() {
 std::unique_ptr<Ident> Parser::parseIdent() {
     auto ident = std::make_unique<Ident>();
 
-    ident->lineno = token_.lineno;
+    ident->lineno = cur_.lineno;
 
-    ident->content = token_.content;
+    ident->content = cur_.content;
 
     match(Token::IDENFR);
 
@@ -90,11 +104,11 @@ std::unique_ptr<Decl> Parser::parseDecl() {
  */
 std::unique_ptr<Btype> Parser::parseBType() {
     auto btype = std::make_unique<Btype>();
-    btype->lineno = token_.lineno;
+    btype->lineno = cur_.lineno;
 
     if (is(Token::INTTK)) {
         match(Token::INTTK);
-        btype->type = std::make_unique<std::string>(Token::toString(Token::INTTK));
+        btype->type = Token::toString(Token::INTTK);
         // printNode("Btype");
         return btype;
     }
@@ -108,7 +122,7 @@ std::unique_ptr<Btype> Parser::parseBType() {
  */
 std::unique_ptr<ConstDecl> Parser::parseConstDecl() {
     auto constDecl = std::make_unique<ConstDecl>();
-    constDecl->lineno = token_.lineno;
+    constDecl->lineno = cur_.lineno;
 
     match(Token::CONSTTK);
 
@@ -133,7 +147,7 @@ std::unique_ptr<ConstDecl> Parser::parseConstDecl() {
  */
 std::unique_ptr<ConstDef> Parser::parseConstDef() {
     auto constDef = std::make_unique<ConstDef>();
-    constDef->lineno = token_.lineno;
+    constDef->lineno = cur_.lineno;
 
     constDef->ident = parseIdent();
 
@@ -145,7 +159,7 @@ std::unique_ptr<ConstDef> Parser::parseConstDef() {
         match(Token::RBRACK);
     }
 
-    match(Token::EQL);
+    match(Token::ASSIGN);
 
     constDef->constInitVal = parseConstInitVal();
 
@@ -159,9 +173,23 @@ std::unique_ptr<ConstDef> Parser::parseConstDef() {
  */
 std::unique_ptr<Exp> Parser::parseExp() {
     auto exp = std::make_unique<Exp>();
-    exp->lineno = token_.lineno;
+    exp->lineno = cur_.lineno;
 
     exp->addExp = parseAddExp();
+
+    printNode("Exp");
+    return exp;
+}
+
+/**
+ * @brief 重载 parseExp 以支持传入首个 LVal
+ * @note 为了解决 Stmt 解析时赋值语句和表达式语句的二义性。
+ */
+std::unique_ptr<Exp> Parser::parseExp(std::unique_ptr<LVal> lval) {
+    auto exp = std::make_unique<Exp>();
+    exp->lineno = cur_.lineno;
+
+    exp->addExp = parseAddExp(std::move(lval));
 
     printNode("Exp");
     return exp;
@@ -173,7 +201,7 @@ std::unique_ptr<Exp> Parser::parseExp() {
  */
 std::unique_ptr<LVal> Parser::parseLVal() {
     auto lval = std::make_unique<LVal>();
-    lval->lineno = token_.lineno;
+    lval->lineno = cur_.lineno;
 
     lval->ident = parseIdent();
 
@@ -196,9 +224,9 @@ std::unique_ptr<LVal> Parser::parseLVal() {
 std::unique_ptr<Number> Parser::parseNumber() {
     auto num = std::make_unique<Number>();
 
-    num->lineno = token_.lineno;
+    num->lineno = cur_.lineno;
 
-    num->value = token_.content;
+    num->value = cur_.content;
 
     match(Token::INTCON);
 
@@ -212,7 +240,7 @@ std::unique_ptr<Number> Parser::parseNumber() {
  */
 std::unique_ptr<PrimaryExp> Parser::parsePrimaryExp() {
     auto primaryExp = std::make_unique<PrimaryExp>();
-    primaryExp->lineno = token_.lineno;
+    primaryExp->lineno = cur_.lineno;
 
     if (is(Token::LPARENT)) {
         primaryExp->kind = PrimaryExp::EXP;
@@ -251,12 +279,60 @@ std::unique_ptr<PrimaryExp> Parser::parsePrimaryExp() {
 }
 
 /**
+ * @brief 重载 parsePrimaryExp 以支持传入首个 LVal
+ * @note 为了解决 Stmt 解析时赋值语句和表达式语句的二义性
+ */
+std::unique_ptr<PrimaryExp> Parser::parsePrimaryExp(std::unique_ptr<LVal> lval) {
+    auto primaryExp = std::make_unique<PrimaryExp>();
+    primaryExp->lineno = cur_.lineno;
+
+    if (is(Token::LPARENT)) {
+        primaryExp->kind = PrimaryExp::EXP;
+
+        match(Token::LPARENT);
+
+        primaryExp->exp = parseExp();
+
+        match(Token::RPARENT);
+
+        printNode("PrimaryExp");
+        return primaryExp;
+    }
+
+    if (is(Token::IDENFR)) {
+        primaryExp->kind = PrimaryExp::LVAL;
+
+        match(Token::IDENFR);
+
+        if (lval == nullptr) {
+            primaryExp->lval = parseLVal();
+        } else {
+            primaryExp->lval = std::move(lval);
+        }
+
+        printNode("PrimaryExp");
+        return primaryExp;
+    }
+
+    if (is(Token::INTCON)) {
+        primaryExp->kind = PrimaryExp::NUMBER;
+
+        primaryExp->number = parseNumber();
+
+        printNode("PrimaryExp");
+        return primaryExp;
+    }
+
+    return nullptr;
+}
+
+/**
  * @brief 解析`单目运算符`
  * @note '+' | '−' | '!'
  */
 std::unique_ptr<UnaryOp> Parser::parseUnaryOp() {
     auto unaryOp = std::make_unique<UnaryOp>();
-    unaryOp->lineno = token_.lineno;
+    unaryOp->lineno = cur_.lineno;
 
     if (is(Token::PLUS)) {
         unaryOp->kind = UnaryOp::PLUS;
@@ -288,7 +364,7 @@ std::unique_ptr<UnaryOp> Parser::parseUnaryOp() {
  */
 std::unique_ptr<FuncRParams> Parser::parseFuncRParams() {
     auto funcRParams = std::make_unique<FuncRParams>();
-    funcRParams->lineno = token_.lineno;
+    funcRParams->lineno = cur_.lineno;
 
     funcRParams->params.push_back(parseExp());
 
@@ -307,7 +383,7 @@ std::unique_ptr<FuncRParams> Parser::parseFuncRParams() {
  */
 std::unique_ptr<UnaryExp> Parser::parseUnaryExp() {
     auto unaryExp = std::make_unique<UnaryExp>();
-    unaryExp->lineno = token_.lineno;
+    unaryExp->lineno = cur_.lineno;
 
     if (is(Token::IDENFR, Token::LPARENT)) {
         unaryExp->kind = UnaryExp::CALL;
@@ -349,7 +425,67 @@ std::unique_ptr<UnaryExp> Parser::parseUnaryExp() {
         } else if (is(Token::NOT)) {
             unary.op = parseUnaryOp();
         } else {
-            LOG_ERROR(token_.lineno, "[Parser] invalid UnaryOp in UnaryExp");
+            LOG_ERROR(cur_.lineno, "[Parser] invalid UnaryOp in UnaryExp");
+        }
+
+        unary.expr = parseUnaryExp();
+        unaryExp->unary.push_back(std::move(unary));
+        printNode("UnaryExp");
+        return unaryExp;
+    }
+
+    return nullptr;
+}
+
+/**
+ * @brief 重载 parseUnaryExp 以支持传入首个 LVal
+ * @note 为了解决 Stmt 解析时赋值语句和表达式语句的二义性
+ */
+std::unique_ptr<UnaryExp> Parser::parseUnaryExp(std::unique_ptr<LVal> lval) {
+    auto unaryExp = std::make_unique<UnaryExp>();
+    unaryExp->lineno = cur_.lineno;
+
+    if (is(Token::IDENFR, Token::LPARENT)) {
+        unaryExp->kind = UnaryExp::CALL;
+        UnaryExp::Call call;
+
+        call.ident = parseIdent();
+
+        match(Token::LPARENT);
+
+        if (!is(Token::RPARENT)) {
+            call.params = parseFuncRParams();
+        }
+
+        match(Token::RPARENT);
+
+        unaryExp->call = std::make_unique<UnaryExp::Call>(std::move(call));
+        printNode("UnaryExp");
+        return unaryExp;
+    }
+
+    if (is(Token::LPARENT) || is(Token::IDENFR) || is(Token::INTCON)) {
+        unaryExp->kind = UnaryExp::PRIMARY;
+
+        unaryExp->primary = parsePrimaryExp(std::move(lval));
+
+        printNode("UnaryExp");
+        return unaryExp;
+    }
+
+    if (is(Token::PLUS) || is(Token::MINU) || is(Token::NOT)) {
+        unaryExp->kind = UnaryExp::UNARY_OP;
+
+        UnaryExp::Unary unary;
+
+        if (is(Token::PLUS)) {
+            unary.op = parseUnaryOp();
+        } else if (is(Token::MINU)) {
+            unary.op = parseUnaryOp();
+        } else if (is(Token::NOT)) {
+            unary.op = parseUnaryOp();
+        } else {
+            LOG_ERROR(cur_.lineno, "[Parser] invalid UnaryOp in UnaryExp");
         }
 
         unary.expr = parseUnaryExp();
@@ -367,11 +503,46 @@ std::unique_ptr<UnaryExp> Parser::parseUnaryExp() {
  */
 std::unique_ptr<MulExp> Parser::parseMulExp() {
     auto mulExp = std::make_unique<MulExp>();
-    mulExp->lineno = token_.lineno;
+    mulExp->lineno = cur_.lineno;
 
     mulExp->first = parseUnaryExp();
 
     while (is(Token::MULT) || is(Token::DIV) || is(Token::MOD)) {
+        printNode("MulExp");
+        MulExp::Operator op;
+
+        if (is(Token::MULT)) {
+            op = MulExp::MULT;
+            match(Token::MULT);
+        } else if (is(Token::DIV)) {
+            op = MulExp::DIV;
+            match(Token::DIV);
+        } else {
+            op = MulExp::MOD;
+            match(Token::MOD);
+        }
+
+        auto unaryExp = parseUnaryExp();
+
+        mulExp->rest.push_back({op, std::move(unaryExp)});
+    }
+
+    printNode("MulExp");
+    return mulExp;
+}
+
+/**
+ * @brief 重载 parseMulExp 以支持传入首个 LVal
+ * @note 为了解决 Stmt 解析时赋值语句和表达式语句的二义性
+ */
+std::unique_ptr<MulExp> Parser::parseMulExp(std::unique_ptr<LVal> lval) {
+    auto mulExp = std::make_unique<MulExp>();
+    mulExp->lineno = cur_.lineno;
+
+    mulExp->first = parseUnaryExp(std::move(lval));
+
+    while (is(Token::MULT) || is(Token::DIV) || is(Token::MOD)) {
+        printNode("MulExp");
         MulExp::Operator op;
 
         if (is(Token::MULT)) {
@@ -396,15 +567,51 @@ std::unique_ptr<MulExp> Parser::parseMulExp() {
 
 /**
  * @brief 解析`加减表达式`
- * @note MulExp | AddExp ('+' | '−') MulExp
+ * @note 原始文法: MulExp | AddExp ('+' | '−') MulExp
  */
 std::unique_ptr<AddExp> Parser::parseAddExp() {
     auto addExp = std::make_unique<AddExp>();
-    addExp->lineno = token_.lineno;
+    addExp->lineno = cur_.lineno;
 
     addExp->first = parseMulExp();
 
     while (is(Token::PLUS) || is(Token::MINU)) {
+        // 除了最后一个MulExp其余应该打印`AddExp`
+        printNode("AddExp");
+
+        AddExp::Operator op;
+
+        if (is(Token::PLUS)) {
+            op = AddExp::PLUS;
+            match(Token::PLUS);
+        } else {
+            op = AddExp::MINU;
+            match(Token::MINU);
+        }
+
+        auto mulExp = parseMulExp();
+
+        addExp->rest.emplace_back(op, std::move(mulExp));
+    }
+
+    printNode("AddExp");
+    return addExp;
+}
+
+/**
+ * @brief 重载 parseAddExp 以支持传入首个 LVal
+ * @note 为了解决 Stmt 解析时赋值语句和表达式语句的二义性
+ */
+std::unique_ptr<AddExp> Parser::parseAddExp(std::unique_ptr<LVal> lval) {
+    auto addExp = std::make_unique<AddExp>();
+    addExp->lineno = cur_.lineno;
+
+    addExp->first = parseMulExp(std::move(lval));
+
+    while (is(Token::PLUS) || is(Token::MINU)) {
+        // 除了最后一个MulExp其余应该打印`AddExp`
+        printNode("AddExp");
+
         AddExp::Operator op;
 
         if (is(Token::PLUS)) {
@@ -430,7 +637,7 @@ std::unique_ptr<AddExp> Parser::parseAddExp() {
  */
 std::unique_ptr<ConstExp> Parser::parseConstExp() {
     auto constExp = std::make_unique<ConstExp>();
-    constExp->lineno = token_.lineno;
+    constExp->lineno = cur_.lineno;
 
     constExp->addExp = parseAddExp();
 
@@ -444,7 +651,7 @@ std::unique_ptr<ConstExp> Parser::parseConstExp() {
  */
 std::unique_ptr<ConstInitVal> Parser::parseConstInitVal() {
     auto constInitVal = std::make_unique<ConstInitVal>();
-    constInitVal->lineno = token_.lineno;
+    constInitVal->lineno = cur_.lineno;
 
     if (is(Token::LBRACE)) {
         match(Token::LBRACE);
@@ -476,7 +683,7 @@ std::unique_ptr<ConstInitVal> Parser::parseConstInitVal() {
  */
 std::unique_ptr<InitVal> Parser::parseInitVal() {
     auto initVal = std::make_unique<InitVal>();
-    initVal->lineno = token_.lineno;
+    initVal->lineno = cur_.lineno;
 
     if (is(Token::LBRACE)) {
         match(Token::LBRACE);
@@ -508,7 +715,7 @@ std::unique_ptr<InitVal> Parser::parseInitVal() {
  */
 std::unique_ptr<VarDef> Parser::parseVarDef() {
     auto varDef = std::make_unique<VarDef>();
-    varDef->lineno = token_.lineno;
+    varDef->lineno = cur_.lineno;
 
     varDef->ident = parseIdent();
 
@@ -520,8 +727,8 @@ std::unique_ptr<VarDef> Parser::parseVarDef() {
         match(Token::RBRACK);
     }
 
-    if (is(Token::EQL)) {
-        match(Token::EQL);
+    if (is(Token::ASSIGN)) {
+        match(Token::ASSIGN);
 
         varDef->initVal = parseInitVal();
     }
@@ -536,7 +743,7 @@ std::unique_ptr<VarDef> Parser::parseVarDef() {
  */
 std::unique_ptr<VarDecl> Parser::parseVarDecl() {
     auto varDecl = std::make_unique<VarDecl>();
-    varDecl->lineno = token_.lineno;
+    varDecl->lineno = cur_.lineno;
 
     if (is(Token::STATICTK)) {
         varDecl->prefix = Token::toString(Token::STATICTK);
@@ -566,16 +773,17 @@ std::unique_ptr<VarDecl> Parser::parseVarDecl() {
  */
 std::unique_ptr<ForStmt> Parser::parseForStmt() {
     auto forStmt = std::make_unique<ForStmt>();
-    forStmt->lineno = token_.lineno;
+    forStmt->lineno = cur_.lineno;
 
     auto lValFirst = parseLVal();
-    match(Token::EQL);
+    match(Token::ASSIGN);
     auto expFirst = parseExp();
     forStmt->assigns.push_back({std::move(lValFirst), std::move(expFirst)});
 
     while (is(Token::COMMA)) {
+        match(Token::COMMA);
         auto lVal = parseLVal();
-        match(Token::EQL);
+        match(Token::ASSIGN);
         auto exp = parseExp();
         forStmt->assigns.push_back({std::move(lVal), std::move(exp)});
     }
@@ -590,12 +798,13 @@ std::unique_ptr<ForStmt> Parser::parseForStmt() {
  */
 std::unique_ptr<RelExp> Parser::parseRelExp() {
     auto relExp = std::make_unique<RelExp>();
-    relExp->lineno = token_.lineno;
+    relExp->lineno = cur_.lineno;
 
     relExp->addExpFirst = parseAddExp();
 
     while (is(Token::LEQ) || is(Token::GEQ) ||
         is(Token::LSS) || is(Token::GRE)) {
+        printNode("RelExp");
         RelExp::Operator op;
         if (is(Token::LEQ)) {
             match(Token::LEQ);
@@ -624,11 +833,12 @@ std::unique_ptr<RelExp> Parser::parseRelExp() {
  */
 std::unique_ptr<EqExp> Parser::parseEqExp() {
     auto eqExp = std::make_unique<EqExp>();
-    eqExp->lineno = token_.lineno;
+    eqExp->lineno = cur_.lineno;
 
     eqExp->relExpFirst = parseRelExp();
 
     while (is(Token::EQL) || is(Token::NEQ)) {
+        printNode("EqExp");
         EqExp::Operator op;
         if (is(Token::EQL)) {
             match(Token::EQL);
@@ -651,11 +861,13 @@ std::unique_ptr<EqExp> Parser::parseEqExp() {
  */
 std::unique_ptr<LAndExp> Parser::parseLAndExp() {
     auto lAndExp = std::make_unique<LAndExp>();
-    lAndExp->lineno = token_.lineno;
+    lAndExp->lineno = cur_.lineno;
 
     lAndExp->eqExps.push_back(parseEqExp());
 
     while (is(Token::AND)) {
+        printNode("LAndExp");
+        match(Token::AND);
         lAndExp->eqExps.push_back(parseEqExp());
     }
 
@@ -669,11 +881,13 @@ std::unique_ptr<LAndExp> Parser::parseLAndExp() {
  */
 std::unique_ptr<LOrExp> Parser::parseLOrExp() {
     auto lOrExp = std::make_unique<LOrExp>();
-    lOrExp->lineno = token_.lineno;
+    lOrExp->lineno = cur_.lineno;
 
     lOrExp->eqExps.push_back(parseLAndExp());
 
     while (is(Token::OR)) {
+        printNode("LOrExp");
+        match(Token::OR);
         lOrExp->eqExps.push_back(parseLAndExp());
     }
 
@@ -687,7 +901,7 @@ std::unique_ptr<LOrExp> Parser::parseLOrExp() {
  */
 std::unique_ptr<Cond> Parser::parseCond() {
     auto cond = std::make_unique<Cond>();
-    cond->lineno = token_.lineno;
+    cond->lineno = cur_.lineno;
 
     cond->lOrExp = parseLOrExp();
 
@@ -710,12 +924,24 @@ std::unique_ptr<Cond> Parser::parseCond() {
  */
 std::unique_ptr<Stmt> Parser::parseStmt() {
     auto stmt = std::make_unique<Stmt>();
-    stmt->lineno = token_.lineno;
+    stmt->lineno = cur_.lineno;
 
     std::unique_ptr<LVal> lVal;
 
+    if (is(Token::SEMICN)) {
+        match(Token::SEMICN);
+        stmt->kind = Stmt::EXP;
+        stmt->exp = nullptr;
+        printNode("Stmt");
+        return stmt;
+    }
+
+    // 这里需要注意：赋值语句和表达式语句第一个语法成分都有可能是 LVal
     if (is(Token::IDENFR)) {
-        lVal = parseLVal();
+        if (is(Token::IDENFR) && !is(Token::IDENFR, Token::LPARENT)) {
+            // 此时可以确定是 LVal，但无法确定是赋值语句还是表达式语句，先解析 LVal，后续都能用到
+            lVal = parseLVal();
+        }
 
         if (is(Token::ASSIGN)) {
             match(Token::ASSIGN);
@@ -728,7 +954,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         }
 
         stmt->kind = Stmt::EXP;
-        stmt->exp = parseExp();
+        stmt->exp = parseExp(std::move(lVal));
         match(Token::SEMICN);
         printNode("Stmt");
         return stmt;
@@ -820,10 +1046,10 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         stmt->kind = Stmt::PRINTF;
         stmt->printf = std::make_unique<Stmt::Printf>();
         if (is(Token::STRCON)) {
-            stmt->printf->str = token_.content;
+            stmt->printf->str = cur_.content;
             match(Token::STRCON);
         } else {
-            ErrorReporter::error(token_.lineno, "[Parser] missing StringConst in Printf");
+            ErrorReporter::error(cur_.lineno, "[Parser] missing StringConst in Printf");
         }
         while (is(Token::COMMA)) {
             match(Token::COMMA);
@@ -845,7 +1071,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
  */
 std::unique_ptr<BlockItem> Parser::parseBlockItem() {
     auto blockItem = std::make_unique<BlockItem>();
-    blockItem->lineno = token_.lineno;
+    blockItem->lineno = cur_.lineno;
 
     if (is(Token::CONSTTK) || is(Token::STATICTK) || is(Token::INTTK)) {
         blockItem->kind = BlockItem::DECL;
@@ -886,7 +1112,7 @@ std::unique_ptr<Block> Parser::parseBlock() {
  */
 std::unique_ptr<MainFuncDef> Parser::parseMainFuncDef() {
     auto mainFuncDef = std::make_unique<MainFuncDef>();
-    mainFuncDef->lineno = token_.lineno;
+    mainFuncDef->lineno = cur_.lineno;
 
     match(Token::INTTK);
 
@@ -899,7 +1125,7 @@ std::unique_ptr<MainFuncDef> Parser::parseMainFuncDef() {
     if (is(Token::LBRACE)) {
         mainFuncDef->block = parseBlock();
     } else {
-        ErrorReporter::error(token_.lineno, "[Parser] missing Block in MainFuncDef");
+        ErrorReporter::error(cur_.lineno, "[Parser] missing Block in MainFuncDef");
     }
 
     printNode("MainFuncDef");
@@ -908,7 +1134,7 @@ std::unique_ptr<MainFuncDef> Parser::parseMainFuncDef() {
 
 std::unique_ptr<FuncType> Parser::parseFuncType() {
     auto funcType = std::make_unique<FuncType>();
-    funcType->lineno = token_.lineno;
+    funcType->lineno = cur_.lineno;
 
     if (is(Token::INTTK)) {
         match(Token::INTTK);
@@ -933,14 +1159,18 @@ std::unique_ptr<FuncType> Parser::parseFuncType() {
  */
 std::unique_ptr<FuncFParam> Parser::parseFuncFParam() {
     auto funcFParam = std::make_unique<FuncFParam>();
-    funcFParam->lineno = token_.lineno;
+    funcFParam->lineno = cur_.lineno;
+
+    funcFParam->btype = parseBType();
 
     funcFParam->ident = parseIdent();
 
     if (is(Token::LBRACK)) {
         match(Token::LBRACK);
 
-        funcFParam->constExp = parseConstExp();
+        if (!is(Token::RBRACK)) {
+            funcFParam->constExp = parseConstExp();
+        }
 
         match(Token::RBRACK);
     }
@@ -955,7 +1185,7 @@ std::unique_ptr<FuncFParam> Parser::parseFuncFParam() {
  */
 std::unique_ptr<FuncFParams> Parser::parseFuncFParams() {
     auto funcFParams = std::make_unique<FuncFParams>();
-    funcFParams->lineno = token_.lineno;
+    funcFParams->lineno = cur_.lineno;
 
     funcFParams->params.push_back(parseFuncFParam());
 
@@ -974,7 +1204,7 @@ std::unique_ptr<FuncFParams> Parser::parseFuncFParams() {
  */
 std::unique_ptr<FuncDef> Parser::parseFuncDef() {
     auto funcDef = std::make_unique<FuncDef>();
-    funcDef->lineno = token_.lineno;
+    funcDef->lineno = cur_.lineno;
 
     if (is(Token::INTTK) || is(Token::VOIDTK)) {
         funcDef->funcType = parseFuncType();
@@ -984,9 +1214,11 @@ std::unique_ptr<FuncDef> Parser::parseFuncDef() {
 
     match(Token::LPARENT);
 
-    funcDef->funcFParams = parseFuncFParams();
+    if (!is(Token::RPARENT)) {
+        funcDef->funcFParams = parseFuncFParams();
+    }
 
-    match(Token::RBRACE);
+    match(Token::RPARENT);
 
     funcDef->block = parseBlock();
 
@@ -1000,21 +1232,20 @@ std::unique_ptr<FuncDef> Parser::parseFuncDef() {
  */
 std::unique_ptr<CompUnit> Parser::parseCompUnit() {
     auto compUnit = std::make_unique<CompUnit>();
-    compUnit->lineno = token_.lineno;
+    compUnit->lineno = cur_.lineno;
 
     getToken();
     while (true) {
         if (is(Token::CONSTTK) || is(Token::STATICTK)) {
             compUnit->var_decls.push_back(parseDecl());
         } else if (is(Token::INTTK, Token::IDENFR)) {
-            match(Token::INTTK);
-            if (is(Token::IDENFR, Token::LBRACK) || is(Token::IDENFR, Token::EQL)) {
-                ungetToken();
-                compUnit->var_decls.push_back(parseDecl());
-            } else if (is(Token::IDENFR, Token::LPARENT)) {
-                LOG_DEBUG(token_.lineno, "in branch");
+            getToken();
+            if (is(Token::IDENFR, Token::LPARENT)) {
                 ungetToken();
                 compUnit->func_defs.push_back(parseFuncDef());
+            } else {
+                ungetToken();
+                compUnit->var_decls.push_back(parseDecl());
             }
         } else if (is(Token::INTTK, Token::MAINTK)) {
             compUnit->main_func = parseMainFuncDef();
@@ -1023,10 +1254,10 @@ std::unique_ptr<CompUnit> Parser::parseCompUnit() {
         } else if (is(Token::VOIDTK)) {
             compUnit->func_defs.push_back(parseFuncDef());
         } else if (is(Token::EOFTK)) {
-            ErrorReporter::error(token_.lineno, "[Parser] can\'t find MainFuncDef");
+            ErrorReporter::error(cur_.lineno, "[Parser] can\'t find MainFuncDef");
             return nullptr;
         } else {
-            LOG_ERROR(token_.lineno, "[Parser] Unreachable");
+            LOG_ERROR(cur_.lineno, "[Parser] Unreachable");
             return nullptr;
         }
     }
