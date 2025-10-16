@@ -61,11 +61,12 @@ bool Lexer::lexIntConst(Token &token, std::string content) {
 }
 
 bool Lexer::lexStringConst(Token &token, std::string content) {
-     char ch = getChar();
-     while (ch == 32 || ch == 33 || (ch >= 40 && ch <= 126) || ch == '%') {
+    char ch = getChar();
+    // while (ch == 32 || ch == 33 || (ch >= 40 && ch <= 126) || ch == '%') {
+    while (ch != '\"') {
          content.append(1, ch);
          ch = getChar();
-     }
+    }
 
     if (ch == '"') {
         content.append(1, ch);
