@@ -4,10 +4,19 @@
 #include "error.h"
 #include "logger.h"
 
+void Parser::printNode(std::string node) {
+    std::cout << '<' << node << '>' << std::endl;
+    out_->get() << '<' << node << '>' << std::endl;
+}
+
 void Parser::getToken() {
     last_ = token_;
     token_ = lookahead_;
     lexer_.next(lookahead_);
+
+    LOG_DEBUG(last_.lineno, "last_: " + Token::toString(last_));
+    LOG_DEBUG(token_.lineno, "token_: " + Token::toString(token_));
+    LOG_DEBUG(lookahead_.lineno, "lookahead_: " + Token::toString(lookahead_));
 }
 
 void Parser::ungetToken() {
@@ -16,6 +25,10 @@ void Parser::ungetToken() {
 
 bool Parser::match(Token::TokenType expected) {
     if (token_.type == expected) {
+        if (out_) {
+            std::cout << Token::toString(token_) << " " << token_.content << std::endl;
+            out_->get() << Token::toString(token_) << " " << token_.content << std::endl;
+        }
         getToken();
         return true;
     }
@@ -24,6 +37,7 @@ bool Parser::match(Token::TokenType expected) {
 }
 
 bool Parser::is(Token::TokenType type) {
+    LOG_DEBUG(token_.lineno, "Check " + Token::toString(type));
     return token_.type == type;
 }
 
@@ -31,8 +45,8 @@ bool Parser::is(Token::TokenType type, Token::TokenType ahead_type) {
     return token_.type == type && lookahead_.type == ahead_type;
 }
 
-void Parser::parse() {
-    parseCompUnit();
+std::unique_ptr<CompUnit> Parser::parse() {
+    return parseCompUnit();
 }
 
 /**
@@ -57,11 +71,13 @@ std::unique_ptr<Ident> Parser::parseIdent() {
 std::unique_ptr<Decl> Parser::parseDecl() {
     if (is(Token::CONSTTK)) {
         auto constDecl = parseConstDecl();
+        // printNode("Decl");
         return std::make_unique<Decl>(std::move(*constDecl));
     }
 
     if (is(Token::STATICTK) || is(Token::INTTK)) {
         auto varDecl = parseVarDecl();
+        // printNode("Decl");
         return std::make_unique<Decl>(std::move(*varDecl));
     }
 
@@ -79,6 +95,7 @@ std::unique_ptr<Btype> Parser::parseBType() {
     if (is(Token::INTTK)) {
         match(Token::INTTK);
         btype->type = std::make_unique<std::string>(Token::toString(Token::INTTK));
+        // printNode("Btype");
         return btype;
     }
 
@@ -106,6 +123,7 @@ std::unique_ptr<ConstDecl> Parser::parseConstDecl() {
 
     match(Token::SEMICN);
 
+    printNode("ConstDecl");
     return constDecl;
 }
 
@@ -131,6 +149,7 @@ std::unique_ptr<ConstDef> Parser::parseConstDef() {
 
     constDef->constInitVal = parseConstInitVal();
 
+    printNode("ConstDef");
     return constDef;
 }
 
@@ -144,6 +163,7 @@ std::unique_ptr<Exp> Parser::parseExp() {
 
     exp->addExp = parseAddExp();
 
+    printNode("Exp");
     return exp;
 }
 
@@ -165,6 +185,7 @@ std::unique_ptr<LVal> Parser::parseLVal() {
         match(Token::RBRACK);
     }
 
+    printNode("LVal");
     return lval;
 }
 
@@ -181,6 +202,7 @@ std::unique_ptr<Number> Parser::parseNumber() {
 
     match(Token::INTCON);
 
+    printNode("Number");
     return num;
 }
 
@@ -201,6 +223,7 @@ std::unique_ptr<PrimaryExp> Parser::parsePrimaryExp() {
 
         match(Token::RPARENT);
 
+        printNode("PrimaryExp");
         return primaryExp;
     }
 
@@ -211,6 +234,7 @@ std::unique_ptr<PrimaryExp> Parser::parsePrimaryExp() {
 
         primaryExp->lval = parseLVal();
 
+        printNode("PrimaryExp");
         return primaryExp;
     }
 
@@ -219,6 +243,7 @@ std::unique_ptr<PrimaryExp> Parser::parsePrimaryExp() {
 
         primaryExp->number = parseNumber();
 
+        printNode("PrimaryExp");
         return primaryExp;
     }
 
@@ -236,18 +261,21 @@ std::unique_ptr<UnaryOp> Parser::parseUnaryOp() {
     if (is(Token::PLUS)) {
         unaryOp->kind = UnaryOp::PLUS;
         match(Token::PLUS);
+        printNode("UnaryOp");
         return unaryOp;
     }
 
     if (is(Token::MINU)) {
         unaryOp->kind = UnaryOp::MINU;
         match(Token::MINU);
+        printNode("UnaryOp");
         return unaryOp;
     }
 
     if (is(Token::NOT)) {
         unaryOp->kind = UnaryOp::NOT;
         match(Token::NOT);
+        printNode("UnaryOp");
         return unaryOp;
     }
 
@@ -269,6 +297,7 @@ std::unique_ptr<FuncRParams> Parser::parseFuncRParams() {
         funcRParams->params.push_back(parseExp());
     }
 
+    printNode("FuncRParams");
     return funcRParams;
 }
 
@@ -288,11 +317,14 @@ std::unique_ptr<UnaryExp> Parser::parseUnaryExp() {
 
         match(Token::LPARENT);
 
-        call.params = parseFuncRParams();
+        if (!is(Token::RPARENT)) {
+            call.params = parseFuncRParams();
+        }
 
         match(Token::RPARENT);
 
         unaryExp->call = std::make_unique<UnaryExp::Call>(std::move(call));
+        printNode("UnaryExp");
         return unaryExp;
     }
 
@@ -301,6 +333,7 @@ std::unique_ptr<UnaryExp> Parser::parseUnaryExp() {
 
         unaryExp->primary = parsePrimaryExp();
 
+        printNode("UnaryExp");
         return unaryExp;
     }
 
@@ -321,6 +354,7 @@ std::unique_ptr<UnaryExp> Parser::parseUnaryExp() {
 
         unary.expr = parseUnaryExp();
         unaryExp->unary.push_back(std::move(unary));
+        printNode("UnaryExp");
         return unaryExp;
     }
 
@@ -356,8 +390,8 @@ std::unique_ptr<MulExp> Parser::parseMulExp() {
         mulExp->rest.push_back({op, std::move(unaryExp)});
     }
 
+    printNode("MulExp");
     return mulExp;
-
 }
 
 /**
@@ -386,6 +420,7 @@ std::unique_ptr<AddExp> Parser::parseAddExp() {
         addExp->rest.emplace_back(op, std::move(mulExp));
     }
 
+    printNode("AddExp");
     return addExp;
 }
 
@@ -399,6 +434,7 @@ std::unique_ptr<ConstExp> Parser::parseConstExp() {
 
     constExp->addExp = parseAddExp();
 
+    printNode("ConstExp");
     return constExp;
 }
 
@@ -430,6 +466,7 @@ std::unique_ptr<ConstInitVal> Parser::parseConstInitVal() {
         constInitVal->exp = parseConstExp();
     }
 
+    printNode("ConstInitVal");
     return constInitVal;
 }
 
@@ -461,6 +498,7 @@ std::unique_ptr<InitVal> Parser::parseInitVal() {
         initVal->exp = parseExp();
     }
 
+    printNode("InitVal");
     return initVal;
 }
 
@@ -488,6 +526,7 @@ std::unique_ptr<VarDef> Parser::parseVarDef() {
         varDef->initVal = parseInitVal();
     }
 
+    printNode("VarDef");
     return varDef;
 }
 
@@ -517,11 +556,287 @@ std::unique_ptr<VarDecl> Parser::parseVarDecl() {
 
     match (Token::SEMICN);
 
+    printNode("VarDecl");
     return varDecl;
 }
 
-bool Parser::parseStmt() {
+/**
+ * @brief 解析`for语句`
+ * @note LVal '=' Exp { ',' LVal '=' Exp }
+ */
+std::unique_ptr<ForStmt> Parser::parseForStmt() {
+    auto forStmt = std::make_unique<ForStmt>();
+    forStmt->lineno = token_.lineno;
 
+    auto lValFirst = parseLVal();
+    match(Token::EQL);
+    auto expFirst = parseExp();
+    forStmt->assigns.push_back({std::move(lValFirst), std::move(expFirst)});
+
+    while (is(Token::COMMA)) {
+        auto lVal = parseLVal();
+        match(Token::EQL);
+        auto exp = parseExp();
+        forStmt->assigns.push_back({std::move(lVal), std::move(exp)});
+    }
+
+    printNode("ForStmt");
+    return forStmt;
+}
+
+/**
+ * @brief 解析`关系表达式`
+ * @note AddExp | RelExp ('<' | '>' | '<=' | '>=') AddExp
+ */
+std::unique_ptr<RelExp> Parser::parseRelExp() {
+    auto relExp = std::make_unique<RelExp>();
+    relExp->lineno = token_.lineno;
+
+    relExp->addExpFirst = parseAddExp();
+
+    while (is(Token::LEQ) || is(Token::GEQ) ||
+        is(Token::LSS) || is(Token::GRE)) {
+        RelExp::Operator op;
+        if (is(Token::LEQ)) {
+            match(Token::LEQ);
+            op = RelExp::LEQ;
+        } else if (is(Token::GEQ)) {
+            match(Token::GEQ);
+            op = RelExp::GEQ;
+        } else if (is(Token::LSS)) {
+            match(Token::LSS);
+            op = RelExp::LSS;
+        } else {
+            match(Token::GRE);
+            op = RelExp::GRE;
+        }
+        auto addExp = parseAddExp();
+        relExp->addExpRest.push_back({op, std::move(addExp)});
+    }
+
+    printNode("RelExp");
+    return relExp;
+}
+
+/**
+ * @brief 解析`相等性表达式`
+ * @note RelExp | EqExp ('==' | '!=') RelExp
+ */
+std::unique_ptr<EqExp> Parser::parseEqExp() {
+    auto eqExp = std::make_unique<EqExp>();
+    eqExp->lineno = token_.lineno;
+
+    eqExp->relExpFirst = parseRelExp();
+
+    while (is(Token::EQL) || is(Token::NEQ)) {
+        EqExp::Operator op;
+        if (is(Token::EQL)) {
+            match(Token::EQL);
+            op = EqExp::EQL;
+        } else {
+            match(Token::NEQ);
+            op = EqExp::NEQ;
+        }
+        auto relExp = parseRelExp();
+        eqExp->relExpRest.push_back({op, std::move(relExp)});
+    }
+
+    printNode("EqExp");
+    return eqExp;
+}
+
+/**
+ * @brief 解析`逻辑与表达式`
+ * @note EqExp | LAndExp '&&' EqExp
+ */
+std::unique_ptr<LAndExp> Parser::parseLAndExp() {
+    auto lAndExp = std::make_unique<LAndExp>();
+    lAndExp->lineno = token_.lineno;
+
+    lAndExp->eqExps.push_back(parseEqExp());
+
+    while (is(Token::AND)) {
+        lAndExp->eqExps.push_back(parseEqExp());
+    }
+
+    printNode("LAndExp");
+    return lAndExp;
+}
+
+/**
+ * @brief 解析`逻辑或表达式`
+ * @note LAndExp | LOrExp '||' LAndExp
+ */
+std::unique_ptr<LOrExp> Parser::parseLOrExp() {
+    auto lOrExp = std::make_unique<LOrExp>();
+    lOrExp->lineno = token_.lineno;
+
+    lOrExp->eqExps.push_back(parseLAndExp());
+
+    while (is(Token::OR)) {
+        lOrExp->eqExps.push_back(parseLAndExp());
+    }
+
+    printNode("LOrExp");
+    return lOrExp;
+}
+
+/**
+ * @brief 解析`条件表达式`
+ * @note LOrExp
+ */
+std::unique_ptr<Cond> Parser::parseCond() {
+    auto cond = std::make_unique<Cond>();
+    cond->lineno = token_.lineno;
+
+    cond->lOrExp = parseLOrExp();
+
+    printNode("Cond");
+    return cond;
+}
+
+/**
+ * @brief 解析`语句`
+ * @note
+ * - LVal '=' Exp ';'
+ * - [Exp] ';'
+ * - Block
+ * - 'if' '(' Cond ')' Stmt [ 'else' Stmt ]
+ * - 'for' '(' [ForStmt] ';' [Cond] ';' [ForStmt] ')' Stmt
+ * - 'break' ';'
+ * - 'continue' ';'
+ * - 'return' [Exp] ';'
+ * - 'printf''('StringConst {','Exp}')' ';'
+ */
+std::unique_ptr<Stmt> Parser::parseStmt() {
+    auto stmt = std::make_unique<Stmt>();
+    stmt->lineno = token_.lineno;
+
+    std::unique_ptr<LVal> lVal;
+
+    if (is(Token::IDENFR)) {
+        lVal = parseLVal();
+
+        if (is(Token::ASSIGN)) {
+            match(Token::ASSIGN);
+            stmt->kind = Stmt::ASSIGN;
+            stmt->assignStmt.lVal = std::move(lVal);
+            stmt->assignStmt.exp = parseExp();
+            match(Token::SEMICN);
+            printNode("Stmt");
+            return stmt;
+        }
+
+        stmt->kind = Stmt::EXP;
+        stmt->exp = parseExp();
+        match(Token::SEMICN);
+        printNode("Stmt");
+        return stmt;
+    }
+
+    if (is(Token::PLUS) || is(Token::MINU) || is(Token::NOT) ||
+        is(Token::LPARENT) || is(Token::INTCON)) {
+        stmt->kind = Stmt::EXP;
+        stmt->exp = parseExp();
+        match(Token::SEMICN);
+        printNode("Stmt");
+        return stmt;
+    }
+
+    if (is(Token::LBRACE)) {
+        match(Token::LBRACE);
+        stmt->kind = Stmt::BLOCK;
+        stmt->block = parseBlock();
+        printNode("Stmt");
+        return stmt;
+    }
+
+    if (is(Token::IFTK)) {
+        match(Token::IFTK);
+        stmt->kind = Stmt::IF;
+        match(Token::LPARENT);
+        stmt->ifStmt.cond = parseCond();
+        match(Token::RPARENT);
+        stmt->ifStmt.thenStmt = parseStmt();
+        if (is(Token::ELSETK)) {
+            match(Token::ELSETK);
+            stmt->ifStmt.elseStmt = parseStmt();
+        }
+        printNode("Stmt");
+        return stmt;
+    }
+
+    if (is(Token::FORTK)) {
+        match(Token::FORTK);
+        stmt->kind = Stmt::FOR;
+        match(Token::LPARENT);
+        if (!is(Token::SEMICN)) {
+            stmt->forStmt.forStmtFirst = parseForStmt();
+        }
+        match(Token::SEMICN);
+        if (!is(Token::SEMICN)) {
+            stmt->forStmt.cond = parseCond();
+        }
+        match(Token::SEMICN);
+        if (!is(Token::RPARENT)) {
+            stmt->forStmt.forStmtSecond = parseForStmt();
+        }
+        match(Token::RPARENT);
+        stmt->forStmt.stmt = parseStmt();
+        printNode("Stmt");
+        return stmt;
+    }
+
+    if (is(Token::BREAKTK)) {
+        match(Token::BREAKTK);
+        stmt->kind = Stmt::BREAK;
+        match(Token::SEMICN);
+        printNode("Stmt");
+        return stmt;
+    }
+
+    if (is(Token::CONTINUETK)) {
+        match(Token::CONTINUETK);
+        stmt->kind = Stmt::CONTINUE;
+        match(Token::SEMICN);
+        printNode("Stmt");
+        return stmt;
+    }
+
+    if (is(Token::RETURNTK)) {
+        match(Token::RETURNTK);
+        stmt->kind = Stmt::RETURN;
+        if (!is(Token::SEMICN)) {
+            stmt->returnExp = parseExp();
+        }
+        match(Token::SEMICN);
+        printNode("Stmt");
+        return stmt;
+    }
+
+    if (is(Token::PRINTFTK)) {
+        match(Token::PRINTFTK);
+        match(Token::LPARENT);
+        stmt->kind = Stmt::PRINTF;
+        stmt->printf = std::make_unique<Stmt::Printf>();
+        if (is(Token::STRCON)) {
+            stmt->printf->str = token_.content;
+            match(Token::STRCON);
+        } else {
+            ErrorReporter::error(token_.lineno, "[Parser] missing StringConst in Printf");
+        }
+        while (is(Token::COMMA)) {
+            match(Token::COMMA);
+            stmt->printf->args.push_back(parseExp());
+        }
+        match(Token::RPARENT);
+        match(Token::SEMICN);
+
+        printNode("Stmt");
+        return stmt;
+    }
+
+    return nullptr;
 }
 
 /**
@@ -529,7 +844,21 @@ bool Parser::parseStmt() {
  * @note Decl | Stmt
  */
 std::unique_ptr<BlockItem> Parser::parseBlockItem() {
+    auto blockItem = std::make_unique<BlockItem>();
+    blockItem->lineno = token_.lineno;
 
+    if (is(Token::CONSTTK) || is(Token::STATICTK) || is(Token::INTTK)) {
+        blockItem->kind = BlockItem::DECL;
+        blockItem->decl = parseDecl();
+        // printNode("BlockItem");
+        return blockItem;
+    }
+
+    blockItem->kind = BlockItem::STMT;
+    blockItem->stmt = parseStmt();
+
+    // printNode("BlockItem");
+    return blockItem;
 }
 
 /**
@@ -547,6 +876,7 @@ std::unique_ptr<Block> Parser::parseBlock() {
 
     match(Token::RBRACE);
 
+    printNode("Block");
     return block;
 }
 
@@ -558,6 +888,10 @@ std::unique_ptr<MainFuncDef> Parser::parseMainFuncDef() {
     auto mainFuncDef = std::make_unique<MainFuncDef>();
     mainFuncDef->lineno = token_.lineno;
 
+    match(Token::INTTK);
+
+    match(Token::MAINTK);
+
     match(Token::LPARENT);
 
     match(Token::RPARENT);
@@ -565,10 +899,99 @@ std::unique_ptr<MainFuncDef> Parser::parseMainFuncDef() {
     if (is(Token::LBRACE)) {
         mainFuncDef->block = parseBlock();
     } else {
-        ErrorReporter::error(token_.lineno, '[Parser] missing Block in MainFuncDef');
+        ErrorReporter::error(token_.lineno, "[Parser] missing Block in MainFuncDef");
     }
 
+    printNode("MainFuncDef");
     return mainFuncDef;
+}
+
+std::unique_ptr<FuncType> Parser::parseFuncType() {
+    auto funcType = std::make_unique<FuncType>();
+    funcType->lineno = token_.lineno;
+
+    if (is(Token::INTTK)) {
+        match(Token::INTTK);
+        funcType->kind = FuncType::INT;
+        printNode("FuncType");
+        return funcType;
+    }
+
+    if (is(Token::VOIDTK)) {
+        match(Token::VOIDTK);
+        funcType->kind = FuncType::VOID;
+        printNode("FuncType");
+        return funcType;
+    }
+
+    return nullptr;
+}
+
+/**
+ * @brief 解析`函数形参`
+ * @note BType Ident ['[' ']']
+ */
+std::unique_ptr<FuncFParam> Parser::parseFuncFParam() {
+    auto funcFParam = std::make_unique<FuncFParam>();
+    funcFParam->lineno = token_.lineno;
+
+    funcFParam->ident = parseIdent();
+
+    if (is(Token::LBRACK)) {
+        match(Token::LBRACK);
+
+        funcFParam->constExp = parseConstExp();
+
+        match(Token::RBRACK);
+    }
+
+    printNode("FuncFParam");
+    return funcFParam;
+}
+
+/**
+ * @brief 解析`函数形参表`
+ * @note FuncFParam { ',' FuncFParam }
+ */
+std::unique_ptr<FuncFParams> Parser::parseFuncFParams() {
+    auto funcFParams = std::make_unique<FuncFParams>();
+    funcFParams->lineno = token_.lineno;
+
+    funcFParams->params.push_back(parseFuncFParam());
+
+    while (is(Token::COMMA)) {
+        match(Token::COMMA);
+        funcFParams->params.push_back(parseFuncFParam());
+    }
+
+    printNode("FuncFParams");
+    return funcFParams;
+}
+
+/**
+ * @brief 解析`函数定义`
+ * @note FuncType Ident '(' [FuncFParams] ')' Block
+ */
+std::unique_ptr<FuncDef> Parser::parseFuncDef() {
+    auto funcDef = std::make_unique<FuncDef>();
+    funcDef->lineno = token_.lineno;
+
+    if (is(Token::INTTK) || is(Token::VOIDTK)) {
+        funcDef->funcType = parseFuncType();
+    }
+
+    funcDef->ident = parseIdent();
+
+    match(Token::LPARENT);
+
+    funcDef->funcFParams = parseFuncFParams();
+
+    match(Token::RBRACE);
+
+    funcDef->block = parseBlock();
+
+    printNode("FuncDef");
+    return funcDef;
 }
 
 /**
@@ -579,30 +1002,31 @@ std::unique_ptr<CompUnit> Parser::parseCompUnit() {
     auto compUnit = std::make_unique<CompUnit>();
     compUnit->lineno = token_.lineno;
 
+    getToken();
     while (true) {
         if (is(Token::CONSTTK) || is(Token::STATICTK)) {
             compUnit->var_decls.push_back(parseDecl());
         } else if (is(Token::INTTK, Token::IDENFR)) {
-            getToken();
+            match(Token::INTTK);
             if (is(Token::IDENFR, Token::LBRACK) || is(Token::IDENFR, Token::EQL)) {
                 ungetToken();
                 compUnit->var_decls.push_back(parseDecl());
             } else if (is(Token::IDENFR, Token::LPARENT)) {
-                if (token_.content == "main") {
-                    ungetToken();
-                    compUnit->main_func = parseMainFuncDef();
-                    return compUnit;
-                }
+                LOG_DEBUG(token_.lineno, "in branch");
                 ungetToken();
                 compUnit->func_defs.push_back(parseFuncDef());
             }
+        } else if (is(Token::INTTK, Token::MAINTK)) {
+            compUnit->main_func = parseMainFuncDef();
+            printNode("CompUnit");
+            return compUnit;
         } else if (is(Token::VOIDTK)) {
             compUnit->func_defs.push_back(parseFuncDef());
         } else if (is(Token::EOFTK)) {
-            ErrorReporter::error(token_.lineno, '[Parser] can\'t find MainFuncDef');
+            ErrorReporter::error(token_.lineno, "[Parser] can\'t find MainFuncDef");
             return nullptr;
         } else {
-            LOG_ERROR(token_.lineno, '[Parser] Unreachable');
+            LOG_ERROR(token_.lineno, "[Parser] Unreachable");
             return nullptr;
         }
     }

@@ -53,14 +53,24 @@ struct Token {
 #undef X
     } type;
 
-    static std::unordered_map<TokenType, std::string> type2String {
+    static const std::unordered_map<TokenType, std::string>& getTypeMap() {
+        static const std::unordered_map<TokenType, std::string> type2String{
 #define X(a, b) {TokenType::a, #a},
-        TOKEN_TYPE
+            TOKEN_TYPE
 #undef X
-    };
+        };
+        return type2String;
+    }
 
     static std::string toString(TokenType t) {
-        return type2String.at(t);
+        const auto& map = getTypeMap();
+        if (auto it = map.find(t); it != map.end())
+            return it->second;
+        return "UNKNOWN";
+    }
+
+    static std::string toString(const Token& t) {
+        return toString(t.type);
     }
 
     std::string content;

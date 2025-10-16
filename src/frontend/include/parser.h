@@ -1,6 +1,7 @@
 #pragma once
 
 #include <any>
+#include <fstream>
 
 #include "ast.h"
 #include "lexer.h"
@@ -9,16 +10,24 @@ using namespace AstNode;
 
 class Parser {
 public:
-    explicit Parser(Lexer &lexer) : lexer_(lexer) {
+    explicit Parser(Lexer &lexer) : lexer_(lexer), out_(std::nullopt) {
         lexer_.next(lookahead_);
-    };
+    }
+
+    explicit Parser(Lexer &lexer, std::ofstream &out) : lexer_(lexer), out_(out) {
+        lexer_.next(lookahead_);
+    }
+
+    std::unique_ptr<CompUnit> parse();
 
 private:
     Lexer &lexer_;
 
     Token last_, token_, lookahead_;
 
-    int braces_ = 0;
+    std::optional<std::reference_wrapper<std::ofstream>> out_;
+
+    void printNode(std::string node);
 
     void getToken();
 
@@ -29,8 +38,6 @@ private:
     bool is(Token::TokenType type);
 
     bool is(Token::TokenType type, Token::TokenType ahead_type);
-
-    void parse();
 
     std::unique_ptr<Ident> parseIdent();
 
@@ -70,15 +77,33 @@ private:
 
     std::unique_ptr<VarDecl> parseVarDecl();
 
+    std::unique_ptr<ForStmt> parseForStmt();
+
+    std::unique_ptr<RelExp> parseRelExp();
+
+    std::unique_ptr<EqExp> parseEqExp();
+
+    std::unique_ptr<LAndExp> parseLAndExp();
+
+    std::unique_ptr<LOrExp> parseLOrExp();
+
+    std::unique_ptr<Cond> parseCond();
+
     std::unique_ptr<FuncDef> parseFuncDef();
 
-    bool parseStmt();
+    std::unique_ptr<Stmt> parseStmt();
 
     std::unique_ptr<BlockItem> parseBlockItem();
 
     std::unique_ptr<Block> parseBlock();
 
     std::unique_ptr<MainFuncDef> parseMainFuncDef();
+
+    std::unique_ptr<FuncType> parseFuncType();
+
+    std::unique_ptr<FuncFParam> parseFuncFParam();
+
+    std::unique_ptr<FuncFParams> parseFuncFParams();
 
     std::unique_ptr<CompUnit> parseCompUnit();
 };

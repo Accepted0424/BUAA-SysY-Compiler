@@ -12,3 +12,11 @@ InitVal → Exp | '{' [ Exp { ',' Exp } ] '}'
     FIRST(FuncDef) = {'void', 'int'}
     FIRST(MainFuncDef) = {'int'}
 ```
+```text
+FIRST('Exp') = {'ident', '(', 'digits', '+', '-', '!'}
+
+FIRST(LVal) = {Ident}
+FIRST(Exp) = {'Exp', ';'}
+FIRST(Block) = {'{'}
+FIRST(Stmt) = {';', 'if', 'while', 'break', 'continue', 'return', '{', Ident, Number, '(', '+', '-', '!'}
+```

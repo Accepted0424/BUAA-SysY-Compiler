@@ -1,4 +1,6 @@
-/* ***
-** */
-
-if (123 | 123)
+int main(){
+    int c;
+    c= getint();
+    printf("%d",c);
+    return c;
+}
