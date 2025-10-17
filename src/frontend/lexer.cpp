@@ -89,7 +89,8 @@ bool Lexer::lexAndExpr(Token &token, std::string content) {
     ungetChar();
     ErrorReporter::error(lineno_, ERR_ILLEGAL_SYMBOL);
     LOG_ERROR(lineno_, "[Lexer] Unterminated AndExpr");
-    return false;
+    token = Token(Token::AND, content, lineno_);
+    return true;
 }
 
 bool Lexer::lexOrExpr(Token &token, std::string content) {
@@ -102,7 +103,8 @@ bool Lexer::lexOrExpr(Token &token, std::string content) {
     ungetChar();
     ErrorReporter::error(lineno_, ERR_ILLEGAL_SYMBOL);
     LOG_ERROR(lineno_, "[Lexer] Unterminated OrExpr");
-    return false;
+    token = Token(Token::OR, content, lineno_);
+    return true;
 }
 
 bool Lexer::lexNeq(Token &token, std::string content) {

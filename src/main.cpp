@@ -26,6 +26,8 @@ void parse(std::ifstream& file, std::ofstream& out) {
     Lexer lexer(file);
     Parser parser(lexer, out);
 
+    ErrorReporter::get();
+
     parser.parse();
 }
 

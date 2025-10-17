@@ -35,6 +35,8 @@ private:
 
     void ungetToken();
 
+    void skipUntilSemicn();
+
     bool match(Token::TokenType expected);
 
     bool is(Token::TokenType type);

@@ -37,6 +37,18 @@ void Parser::ungetToken() {
     cur_ = last_;
 }
 
+void Parser::skipUntilSemicn() {
+    do {
+        getToken();
+    } while (cur_.type != Token::SEMICN && cur_.type != Token::EOFTK);
+
+    if (cur_.type == Token::EOFTK) {
+        return;
+    }
+
+    getToken();
+}
+
 bool Parser::match(Token::TokenType expected) {
     if (cur_.type == expected) {
         if (out_) {
@@ -46,7 +58,19 @@ bool Parser::match(Token::TokenType expected) {
         getToken();
         return true;
     }
-    ErrorReporter::error(cur_.lineno, "[Parser] unexpected token: " + cur_.content + ", expected: " + Token::toString(expected));
+
+    if (expected == Token::SEMICN) {
+        ErrorReporter::error(last_.lineno, ERR_MISSING_SEMICOLON);
+    } else if (expected == Token::RPARENT) {
+        ErrorReporter::error(last_.lineno, ERR_MISSING_RPARENT);
+        skipUntilSemicn();
+    } else if (expected == Token::RBRACK) {
+        ErrorReporter::error(last_.lineno, ERR_MISSING_RBRACK);
+        skipUntilSemicn();
+    } else {
+        ErrorReporter::error(cur_.lineno, "expect '" + Token::toString(expected) + "'");
+    }
+
     return false;
 }
 
@@ -257,8 +281,6 @@ std::unique_ptr<PrimaryExp> Parser::parsePrimaryExp() {
 
     if (is(Token::IDENFR)) {
         primaryExp->kind = PrimaryExp::LVAL;
-
-        match(Token::IDENFR);
 
         primaryExp->lval = parseLVal();
 
@@ -970,7 +992,6 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
     }
 
     if (is(Token::LBRACE)) {
-        match(Token::LBRACE);
         stmt->kind = Stmt::BLOCK;
         stmt->block = parseBlock();
         printNode("Stmt");

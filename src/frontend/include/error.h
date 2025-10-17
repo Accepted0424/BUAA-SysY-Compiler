@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "parser.h"
+
 // Error codes for semantic and syntax analysis
 #define ERR_ILLEGAL_SYMBOL               "a" // 非法符号
 #define ERR_REDEFINED_NAME               "b" // 名字重定义
