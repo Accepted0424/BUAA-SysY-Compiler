@@ -59,6 +59,8 @@ private:
 
     std::unique_ptr<LVal> parseLVal();
 
+    std::unique_ptr<LVal> parseLValSilent();
+
     std::unique_ptr<Number> parseNumber();
 
     std::unique_ptr<PrimaryExp> parsePrimaryExp();

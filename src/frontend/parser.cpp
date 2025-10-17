@@ -241,6 +241,23 @@ std::unique_ptr<LVal> Parser::parseLVal() {
     return lval;
 }
 
+std::unique_ptr<LVal> Parser::parseLValSilent() {
+    auto lval = std::make_unique<LVal>();
+    lval->lineno = cur_.lineno;
+
+    lval->ident = parseIdent();
+
+    if (is(Token::LBRACK)) {
+        match(Token::LBRACK);
+
+        lval->index = parseExp();
+
+        match(Token::RBRACK);
+    }
+
+    return lval;
+}
+
 /**
  * @brief 解析`数值`
  * @note IntConst
@@ -308,6 +325,16 @@ std::unique_ptr<PrimaryExp> Parser::parsePrimaryExp(std::unique_ptr<LVal> lval) 
     auto primaryExp = std::make_unique<PrimaryExp>();
     primaryExp->lineno = cur_.lineno;
 
+    if (lval != nullptr) {
+        primaryExp->kind = PrimaryExp::LVAL;
+
+        primaryExp->lval = std::move(lval);
+        printNode("LVal");
+
+        printNode("PrimaryExp");
+        return primaryExp;
+    }
+
     if (is(Token::LPARENT)) {
         primaryExp->kind = PrimaryExp::EXP;
 
@@ -330,6 +357,7 @@ std::unique_ptr<PrimaryExp> Parser::parsePrimaryExp(std::unique_ptr<LVal> lval) 
             primaryExp->lval = parseLVal();
         } else {
             primaryExp->lval = std::move(lval);
+            printNode("LVal");
         }
 
         printNode("PrimaryExp");
@@ -466,6 +494,15 @@ std::unique_ptr<UnaryExp> Parser::parseUnaryExp() {
 std::unique_ptr<UnaryExp> Parser::parseUnaryExp(std::unique_ptr<LVal> lval) {
     auto unaryExp = std::make_unique<UnaryExp>();
     unaryExp->lineno = cur_.lineno;
+
+    if (lval != nullptr) {
+        unaryExp->kind = UnaryExp::PRIMARY;
+
+        unaryExp->primary = parsePrimaryExp(std::move(lval));
+
+        printNode("UnaryExp");
+        return unaryExp;
+    }
 
     if (is(Token::IDENFR, Token::LPARENT)) {
         unaryExp->kind = UnaryExp::CALL;
@@ -962,10 +999,11 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
     if (is(Token::IDENFR)) {
         if (is(Token::IDENFR) && !is(Token::IDENFR, Token::LPARENT)) {
             // 此时可以确定是 LVal，但无法确定是赋值语句还是表达式语句，先解析 LVal，后续都能用到
-            lVal = parseLVal();
+            lVal = parseLValSilent();
         }
 
         if (is(Token::ASSIGN)) {
+            printNode("LVal");
             match(Token::ASSIGN);
             stmt->kind = Stmt::ASSIGN;
             stmt->assignStmt.lVal = std::move(lVal);
@@ -976,7 +1014,11 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         }
 
         stmt->kind = Stmt::EXP;
-        stmt->exp = parseExp(std::move(lVal));
+        if (lVal == nullptr) {
+            stmt->exp = parseExp();
+        } else {
+            stmt->exp = parseExp(std::move(lVal));
+        }
         match(Token::SEMICN);
         printNode("Stmt");
         return stmt;
