@@ -14,6 +14,8 @@ private:
 
     std::istream &input_;
 
+    char cur_ = 0;
+
     int lineno_ = 1;
 
     char peekChar();

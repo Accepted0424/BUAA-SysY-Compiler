@@ -23,10 +23,21 @@ char Lexer::getChar() {
     if (ch == std::char_traits<char>::eof()) {
         // EOF(-1)
     }
-    return static_cast<unsigned char>(ch);
+    if (ch == '\n') {
+        lineno_++;
+    }
+    cur_ = static_cast<unsigned char>(ch);
+    return ch;
 }
 
+/**
+ * @brief 回退一个字符
+ * @note 不支持连续回退
+ */
 void Lexer::ungetChar() {
+    if (cur_ == '\n') {
+        lineno_--;
+    }
     input_.unget();
 }
 
@@ -214,7 +225,6 @@ void Lexer::next(Token &token) {
         if (!lexEql(token, content))
             token = Token(Token::ASSIGN, content, lineno_);
     } else if (ch == '\n') {
-        lineno_++;
         return next(token);
     } else if (ch == '/') {
         if (lexSingleLineComment() || lexBlockComment())
