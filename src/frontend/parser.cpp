@@ -63,10 +63,8 @@ bool Parser::match(Token::TokenType expected) {
         ErrorReporter::error(last_.lineno, ERR_MISSING_SEMICOLON);
     } else if (expected == Token::RPARENT) {
         ErrorReporter::error(last_.lineno, ERR_MISSING_RPARENT);
-        skipUntilSemicn();
     } else if (expected == Token::RBRACK) {
         ErrorReporter::error(last_.lineno, ERR_MISSING_RBRACK);
-        skipUntilSemicn();
     } else {
         ErrorReporter::error(cur_.lineno, "expect '" + Token::toString(expected) + "'");
     }
@@ -1277,11 +1275,14 @@ std::unique_ptr<FuncDef> Parser::parseFuncDef() {
 
     match(Token::LPARENT);
 
-    if (!is(Token::RPARENT)) {
+    if (is(Token::LBRACE)) {
+        match(Token::RPARENT);
+    } else if (!is(Token::RPARENT)) {
         funcDef->funcFParams = parseFuncFParams();
+        match(Token::RPARENT);
+    } else {
+        match(Token::RPARENT);
     }
-
-    match(Token::RPARENT);
 
     funcDef->block = parseBlock();
 
