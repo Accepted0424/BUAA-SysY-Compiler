@@ -26,8 +26,8 @@ char Lexer::getChar() {
     if (ch == '\n') {
         lineno_++;
     }
-    cur_ = static_cast<unsigned char>(ch);
-    return ch;
+    cur_ = static_cast<char>(ch);
+    return cur_;
 }
 
 /**

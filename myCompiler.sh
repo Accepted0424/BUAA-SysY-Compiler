@@ -6,6 +6,6 @@ if [ "$1" == "release" ]; then
   fi
 
   if [ "$2" == "hw3" ]; then
-    zip -r hw3.zip src CMakeLists.txt config.json
+    zip -r hw3.zip src CMakeLists.txt config.json myCompiler.sh test
   fi
 fi
