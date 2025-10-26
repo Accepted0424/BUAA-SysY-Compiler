@@ -41,6 +41,14 @@ public:
         }
     }
 
+    void log(const LogLevel level, const std::string& msg) {
+        std::string level_str = levelToString(level);
+        std::cout << "[" << level_str << "] " << msg << std::endl;
+        if (file_.is_open()) {
+            file_ << "[" << level_str << "] " << msg << std::endl;
+        }
+    }
+
 private:
     Logger() : level_(LogLevel::DEBUG) {}
     Logger(const Logger &) = delete; // Delete copy constructor to prevent copying of the singleton instance
@@ -62,7 +70,7 @@ private:
     std::ofstream file_;
 };
 
-#define LOG_DEBUG(lineno, ...) Logger::instance().log(LogLevel::DEBUG, lineno, __VA_ARGS__)
-#define LOG_INFO(lineno, ...)  Logger::instance().log(LogLevel::INFO, lineno, __VA_ARGS__)
-#define LOG_WARN(lineno, ...)  Logger::instance().log(LogLevel::WARN, lineno, __VA_ARGS__)
-#define LOG_ERROR(lineno, ...) Logger::instance().log(LogLevel::ERROR, lineno, __VA_ARGS__)
+#define LOG_DEBUG(...) Logger::instance().log(LogLevel::DEBUG, __VA_ARGS__)
+#define LOG_INFO(...)  Logger::instance().log(LogLevel::INFO,  __VA_ARGS__)
+#define LOG_WARN(...)  Logger::instance().log(LogLevel::WARN,  __VA_ARGS__)
+#define LOG_ERROR(...) Logger::instance().log(LogLevel::ERROR, __VA_ARGS__)

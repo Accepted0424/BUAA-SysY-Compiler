@@ -1301,7 +1301,7 @@ std::unique_ptr<CompUnit> Parser::parseCompUnit() {
     getToken();
     while (true) {
         if (is(Token::CONSTTK) || is(Token::STATICTK)) {
-            compUnit->var_decls.push_back(parseDecl());
+            compUnit->decls.push_back(parseDecl());
         } else if (is(Token::INTTK, Token::IDENFR)) {
             getToken();
             if (is(Token::IDENFR, Token::LPARENT)) {
@@ -1309,7 +1309,7 @@ std::unique_ptr<CompUnit> Parser::parseCompUnit() {
                 compUnit->func_defs.push_back(parseFuncDef());
             } else {
                 ungetToken();
-                compUnit->var_decls.push_back(parseDecl());
+                compUnit->decls.push_back(parseDecl());
             }
         } else if (is(Token::INTTK, Token::MAINTK)) {
             compUnit->main_func = parseMainFuncDef();

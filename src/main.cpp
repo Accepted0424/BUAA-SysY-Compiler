@@ -5,6 +5,8 @@
 #include "lexer.h"
 #include "logger.h"
 #include "parser.h"
+#include "visitor.h"
+#include "llvm/include/ir/module.h"
 
 // homework 2
 void lex(std::ifstream& file, std::ofstream& out) {
@@ -26,9 +28,18 @@ void parse(std::ifstream& file, std::ofstream& out) {
     Lexer lexer(file);
     Parser parser(lexer, out);
 
-    ErrorReporter::get();
-
     parser.parse();
+}
+
+// homework 4
+void semanticAnalyse(std::ifstream& file, std::ofstream& out) {
+    Lexer lexer(file);
+    Parser parser(lexer);
+    auto root = parser.parse();
+
+    ModulePtr module = Module::New("main");
+    auto visitor = Visitor(module);
+    visitor.visit(*root);
 }
 
 int main(int argc, char *argv[]) {
@@ -38,8 +49,8 @@ int main(int argc, char *argv[]) {
 
     Logger::instance().setLevel(LogLevel::RELEASE);
 
-    //lex(infile, outfile);
-    parse(infile, outfile);
+    // lex(infile, outfile);
+    // parse(infile, outfile);
 
     ErrorReporter::get().dump(errorfile);
 

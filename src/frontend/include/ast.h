@@ -37,7 +37,7 @@ namespace AstNode {
     };
 
     struct CompUnit : Node {
-        std::vector<std::unique_ptr<Decl>> var_decls;
+        std::vector<std::unique_ptr<Decl>> decls;
         std::vector<std::unique_ptr<FuncDef>> func_defs;
         std::unique_ptr<MainFuncDef> main_func;
 
@@ -338,10 +338,6 @@ namespace AstNode {
     struct MainFuncDef : FuncDef {
         std::unique_ptr<Block> block;
 
-        // void print(std::ostream &out) override;
-    };
-
-    struct stmts : Node {
         // void print(std::ostream &out) override;
     };
 }

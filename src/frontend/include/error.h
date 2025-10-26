@@ -7,8 +7,15 @@
 
 #include "parser.h"
 
-// Error codes for semantic and syntax analysis
+// lexer errors
 #define ERR_ILLEGAL_SYMBOL               "a" // 非法符号
+
+// parser errors
+#define ERR_MISSING_SEMICOLON            "i" // 缺少分号
+#define ERR_MISSING_RPARENT              "j" // 缺少右小括号 ')'
+#define ERR_MISSING_RBRACK               "k" // 缺少右中括号 ']'
+
+// semantic errors
 #define ERR_REDEFINED_NAME               "b" // 名字重定义
 #define ERR_UNDEFINED_NAME               "c" // 未定义的名字
 #define ERR_FUNC_ARG_COUNT_MISMATCH      "d" // 函数参数个数不匹配
@@ -16,9 +23,6 @@
 #define ERR_VOID_FUNC_RETURN_MISMATCH    "f" // 无返回值的函数存在不匹配的 return 语句
 #define ERR_NONVOID_FUNC_MISSING_RETURN  "g" // 有返回值的函数缺少 return 语句
 #define ERR_CONST_ASSIGNMENT             "h" // 不能改变常量的值
-#define ERR_MISSING_SEMICOLON            "i" // 缺少分号
-#define ERR_MISSING_RPARENT              "j" // 缺少右小括号 ')'
-#define ERR_MISSING_RBRACK               "k" // 缺少右中括号 ']'
 #define ERR_PRINTF_ARG_MISMATCH          "l" // printf 中格式字符与表达式个数不匹配
 #define ERR_BREAK_CONTINUE_OUTSIDE_LOOP  "m" // 在非循环块中使用 break 和 continue 语句
 
