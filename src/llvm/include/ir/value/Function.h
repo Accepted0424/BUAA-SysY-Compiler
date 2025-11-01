@@ -1,64 +1,47 @@
 #pragma once
 
 #include "llvm/include/ir/SlotTracker.h"
-#include "llvm/include/ir/value/GlobalValue.h"
-#include <list>
+#include "GlobalValue.h"
+#include "BasicBlock.h"
 
-#include "User.h"
+#include <list>
 
 class Function final : public GlobalValue {
 public:
     ~Function() override = default;
 
-    static bool classof(const ValueType type) {
-        return type == ValueType::FunctionTy;
-    }
+    BasicBlock* NewBasicBlock();
 
-    void PrintAsm(AsmWriterPtr out) override;
+    static Function* create(LlvmContext &context, Type* returnType, const std::string &name);
 
-    static FunctionPtr New(TypePtr returnType, const std::string &name);
-    static FunctionPtr New(TypePtr returnType, const std::string &name,
-                           std::vector<ArgumentPtr> args);
+    static Function* create(LlvmContext &context, Type* returnType, const std::string &name,
+                       std::vector<Argument*> args);
 
-    BasicBlockPtr NewBasicBlock();
+    using block_iterator = std::list<BasicBlock*>::iterator;
 
-    TypePtr ReturnType() const;
-
-public:
-    using block_iterator = std::list<BasicBlockPtr>::iterator;
-    using argument_iterator = std::vector<ArgumentPtr>::iterator;
-
-    int ArgCount() const { return static_cast<int>(_args.size()); }
-
-    ArgumentPtr GetArg(int argNo) const { return _args[argNo]; }
-    argument_iterator ArgBegin() { return _args.begin(); }
-    argument_iterator ArgEnd() { return _args.end(); }
-
-    int BasicBlockCount() const {
-        return static_cast<int>(_basicBlocks.size());
-    }
+    using argument_iterator = std::vector<Argument*>::iterator;
 
     // Insert a basic block at the end of the function.
-    FunctionPtr InsertBasicBlock(BasicBlockPtr block);
+    Function* InsertBasicBlock(BasicBlock* block);
     // Insert a basic block before the specified iterator.
-    FunctionPtr InsertBasicBlock(block_iterator iter, BasicBlockPtr block);
+    Function* InsertBasicBlock(block_iterator iter, BasicBlock* block);
     // Remove a basic block from the function.
-    FunctionPtr RemoveBasicBlock(BasicBlockPtr block);
+    Function* RemoveBasicBlock(BasicBlock* block);
 
-    block_iterator BasicBlockBegin() { return _basicBlocks.begin(); }
-    block_iterator BasicBlockEnd() { return _basicBlocks.end(); }
+    block_iterator BasicBlockBegin() { return basicBlocks_.begin(); }
 
-    SlotTrackerPtr GetSlotTracker() { return &_slotTracker; }
-
-private:
-    Function(TypePtr type, const std::string &name);
-    Function(TypePtr type, const std::string &name,
-             std::vector<ArgumentPtr> args);
+    block_iterator BasicBlockEnd() { return basicBlocks_.end(); }
 
 private:
-    // We can generate arguments via its type.
-    std::vector<ArgumentPtr> _args;
-    std::list<BasicBlockPtr> _basicBlocks;
+    Function(Type* type, const std::string &name)
+        : GlobalValue(ValueType::FunctionTy, type, name), returnType_(type) {}
 
-    SlotTracker _slotTracker;
+    Function(Type* type, const std::string &name, std::vector<Argument*> &args)
+        : GlobalValue(ValueType::FunctionTy, type, name), returnType_(type), args_(args) {}
+
+    Type* returnType_;
+
+    std::vector<Argument*> args_;
+
+    std::list<BasicBlock*> basicBlocks_;
 };

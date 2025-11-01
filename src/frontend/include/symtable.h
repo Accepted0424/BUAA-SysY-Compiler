@@ -1,5 +1,9 @@
 #pragma once
 #include <unordered_map>
+#include <utility>
+
+#include "error.h"
+#include "llvm/include/ir/value/Value.h"
 
 enum SymbolType {
     INT,
@@ -16,53 +20,53 @@ struct Symbol {
     SymbolType type;
     std::string name;
     int lineno;
-    ValuePtr value;
+    std::shared_ptr<Value> value;
 
     virtual ~Symbol() = default;
 
-    Symbol(SymbolType type, std::string name, ValuePtr value, int lineno)
-        : type(type), name(name), lineno(lineno), value(value) {}
+    Symbol(const SymbolType type, std::string name, const std::shared_ptr<Value> &value, const int lineno)
+        : type(type), name(std::move(name)), lineno(lineno), value(value) {}
 };
 
 struct IntSymbol : Symbol {
-    IntSymbol(std::string name, ValuePtr value, int lineno)
+    IntSymbol(const std::string &name, const std::shared_ptr<Value> &value, const int lineno)
         : Symbol(INT, name, value, lineno) {}
 };
 
 struct IntArraySymbol : Symbol {
-    IntArraySymbol(std::string name, ValuePtr value, int lineno)
+    IntArraySymbol(const std::string &name, const std::shared_ptr<Value> &value, const int lineno)
         : Symbol(INT_ARRAY, name, value, lineno) {}
 };
 
 struct ConstIntSymbol : Symbol {
-    ConstIntSymbol(std::string name, ValuePtr value, int lineno)
+    ConstIntSymbol(const std::string &name, const std::shared_ptr<Value> &value, const int lineno)
         : Symbol(CONST_INT, name, value, lineno) {}
 };
 
 struct ConstIntArraySymbol : Symbol {
-    ConstIntArraySymbol(std::string name, ValuePtr value, int lineno)
+    ConstIntArraySymbol(const std::string &name, const std::shared_ptr<Value> &value, const int lineno)
         : Symbol(CONST_INT_ARRAY, name, value, lineno) {}
 };
 
 struct StaticIntSymbol : Symbol {
-    StaticIntSymbol(std::string name, ValuePtr value, int lineno)
+    StaticIntSymbol(const std::string &name, const std::shared_ptr<Value> &value, const int lineno)
         : Symbol(STATIC_INT, name, value, lineno) {}
 };
 
 struct StaticIntArraySymbol : Symbol {
-    StaticIntArraySymbol(std::string name, ValuePtr value, int lineno)
+    StaticIntArraySymbol(const std::string &name, const std::shared_ptr<Value> &value, const int lineno)
         : Symbol(STATIC_INT_ARRAY, name, value, lineno) {}
 };
 
 struct VoidFuncSymbol : Symbol {
     // TODO
-    VoidFuncSymbol(std::string name, ValuePtr value, int lineno)
+    VoidFuncSymbol(const std::string &name, const std::shared_ptr<Value> &value, const int lineno)
         : Symbol(VOID_FUNC, name, value, lineno) {}
 };
 
 struct IntFuncSymbol : Symbol {
     // TODO
-    IntFuncSymbol(std::string name, ValuePtr value, int lineno)
+    IntFuncSymbol(const std::string &name, const std::shared_ptr<Value> &value, const int lineno)
         : Symbol(INT_FUNC, name, value, lineno) {}
 };
 
@@ -74,7 +78,7 @@ public:
         return symbols_.find(name) != symbols_.end();
     }
 
-    bool addSymbol(std::shared_ptr<Symbol> symbol) {
+    bool addSymbol(const std::shared_ptr<Symbol>& symbol) {
         if (existInScope(symbol->name)) {
             return false;
         }

@@ -6,16 +6,23 @@
 
 class Module final {
 public:
-    // static factory method to create a new Module instance
-    static ModulePtr New(const std::string &name);
+    Module(const std::string &name, LlvmContext &context)
+        : name_(name), context_(&context) {}
+
+    LlvmContext* getContext() const {
+        return context_;
+    }
+
+    void addMainFunction(Function &function);
 
 private:
-    Module(const std::string &name);
-
     std::string name_;
-    LlvmContext context_;
 
-    // These will be managed by LlvmContext. So we don't need to delete them.
+    LlvmContext* context_;
+
+    std::vector<GlobalValuePtr> global_vars_;
+
     std::vector<FunctionPtr> functions_;
+
     FunctionPtr mainFunction_ = nullptr;
 };

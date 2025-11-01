@@ -323,14 +323,14 @@ namespace AstNode {
             STMT
         } kind;
 
-        std::optional<std::unique_ptr<Decl>> decl;
-        std::optional<std::unique_ptr<Stmt>> stmt;
+        std::unique_ptr<Decl> decl;
+        std::unique_ptr<Stmt> stmt;
 
         // void print(std::ostream &out) override;
     };
 
     struct Block : Node {
-        std::vector<std::unique_ptr<Node>> blockItems;
+        std::vector<std::unique_ptr<BlockItem>> blockItems;
 
         // void print(std::ostream &out) override;
     };

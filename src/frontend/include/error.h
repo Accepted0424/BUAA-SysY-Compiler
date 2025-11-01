@@ -1,11 +1,7 @@
 #pragma once
 
-#include <algorithm>
-#include <ostream>
 #include <string>
 #include <vector>
-
-#include "parser.h"
 
 // lexer errors
 #define ERR_ILLEGAL_SYMBOL               "a" // 非法符号

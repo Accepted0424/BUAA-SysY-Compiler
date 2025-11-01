@@ -3,29 +3,50 @@
 #include <memory>
 
 #include "ast.h"
-#include "llvm/include/ir/module.h"
 #include "symtable.h"
+#include "llvm/include/ir/module.h"
+#include "llvm/include/ir/value/BasicBlock.h"
+#include "llvm/include/ir/value/Function.h"
+#include "llvm/include/ir/value/Value.h"
+
+using namespace AstNode;
 
 class Visitor {
 public:
-    Visitor(ModulePtr module)
+    Visitor(Module &module)
         : ir_module_(module),
           cur_scope_(std::make_shared<SymbolTable>(nullptr)) {}
 
-    void visit(const AstNode::CompUnit &node);
+    void visit(const CompUnit &node);
 
 private:
-    ModulePtr ir_module_;
+    Module &ir_module_;
 
     std::shared_ptr<SymbolTable> cur_scope_;
 
-    FunctionPtr cur_func_ = nullptr;
+    Function* cur_func_ = nullptr;
 
-    BasicBlockPtr cur_block_ = nullptr;
+    BasicBlock* cur_block_ = nullptr;
 
-    void visitFuncDef(const AstNode::FuncDef &node);
+    void visitFuncDef(const FuncDef &node);
 
-    ValuePtr visitExp(const AstNode::Exp &exp);
+    void visitMainFuncDef(const MainFuncDef &mainFunc);
 
-    void visitDecl(const AstNode::Decl &elm);
+    std::shared_ptr<Value> visitMulExp(const MulExp &mulExp);
+
+    std::shared_ptr<Value> visitAddExp(const AddExp &addExp);
+
+    std::shared_ptr<Value> visitExp(const Exp &exp);
+
+    int evaluateConstExp(const ConstExp &constExp);
+
+    void visitConstDef(const ConstDef &constDef);
+
+    void visitDecl(const Decl &elm);
+
+    void visitStmt(const Stmt &stmt);
+
+    void visitBlockItem(const BlockItem &blockItem);
+
+    void visitBlock(const Block &block);
 };

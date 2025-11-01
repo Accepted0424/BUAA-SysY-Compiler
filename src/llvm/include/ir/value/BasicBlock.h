@@ -28,10 +28,10 @@ public:
     }
 
     // Insert an instruction at the end of the basic block.
-    BasicBlockPtr InsertInstruction(InstructionPtr instruction);
+    BasicBlockPtr insertInstruction(InstructionPtr instruction);
 
     // Insert an instruction before the specified iterator.
-    BasicBlockPtr InsertInstruction(instruction_iterator iter,
+    BasicBlockPtr insertInstruction(instruction_iterator iter,
                                     InstructionPtr inst);
 
     // Remove an instruction from the basic block.

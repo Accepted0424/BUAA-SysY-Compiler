@@ -6,6 +6,7 @@
 #include "logger.h"
 #include "parser.h"
 #include "visitor.h"
+#include "llvm/include/ir/llvmContext.h"
 #include "llvm/include/ir/module.h"
 
 // homework 2
@@ -37,7 +38,9 @@ void semanticAnalyse(std::ifstream& file, std::ofstream& out) {
     Parser parser(lexer);
     auto root = parser.parse();
 
-    ModulePtr module = Module::New("main");
+    LlvmContext context;
+    auto module = Module("main", context);
+
     auto visitor = Visitor(module);
     visitor.visit(*root);
 }

@@ -1,8 +1,9 @@
 #pragma once
 
 #include "llvm/asm/AsmWriter.h"
-#include "irForward.h"
+#include <utility>
 
+#include "llvm/include/ir/value/Value.h"
 /*
  * Base class for types in LLVM. Can only be accessed by LlvmContext.
  */
@@ -14,8 +15,8 @@ public:
         // Primitive types
         VoidTyID,
         LabelTyID,
-
         // Derived types
+        ArrayTyID,
         IntegerTyID,
         FloatTyID,
         FunctionTyID,
@@ -25,32 +26,13 @@ public:
     // Always use virtual destructor for base class.
     virtual ~Type() = default;
 
-    static TypePtr GetVoidTy(LlvmContextPtr context);
-    static TypePtr GetLabelTy(LlvmContextPtr context);
-
-    TypeID TypeId() const { return _typeId; }
-    LlvmContextPtr Context() const { return _context; }
-
-    bool IsVoidTy() const { return _typeId == VoidTyID; }
-    bool IsLabelTy() const { return _typeId == LabelTyID; }
-
-    bool IsIntegerTy() const { return _typeId == IntegerTyID; }
-    bool IsFloatTy() const { return _typeId == FloatTyID; }
-    bool IsArithmeticTy() const { return IsIntegerTy() || IsFloatTy(); }
-    bool IsPointerTy() const { return _typeId == PointerTyID; }
-
-    template <typename _Ty> _Ty *As() { return static_cast<_Ty *>(this); }
-
-    virtual void PrintAsm(AsmWriterPtr out);
-
 protected:
-    // Prohibit direct instantiation.
-    Type(LlvmContextPtr context, TypeID typeId)
-        : _typeId(typeId), _context(context) {}
+    Type(TypeID typeId)
+        : typeId_(typeId) {
+    }
 
 private:
-    TypeID _typeId;
-    LlvmContextPtr _context;
+    TypeID typeId_;
 };
 
 /*
@@ -63,37 +45,32 @@ class IntegerType : public Type {
 public:
     ~IntegerType() override = default;
 
-    void PrintAsm(AsmWriterPtr out) override;
-
-    static IntegerTypePtr Get(LlvmContextPtr context, unsigned bitWidth);
-
-    unsigned BitWidth() const { return _bitWidth; }
-
 protected:
-    IntegerType(LlvmContextPtr context, unsigned bitWidth)
-        : Type(context, IntegerTyID), _bitWidth(bitWidth) {}
+    IntegerType(unsigned bitWidth)
+        : Type(IntegerTyID), _bitWidth(bitWidth) {
+    }
 
 private:
     unsigned _bitWidth;
 };
 
-class FloatType : public Type {
+/*
+ * Represent an array type.
+ */
+class ArrayType : public Type {
     friend class LlvmContext;
 
 public:
-    ~FloatType() override = default;
+    ~ArrayType() override = default;
 
-    void PrintAsm(AsmWriterPtr out) override;
-
-    static FloatTypePtr Get(LlvmContextPtr context, unsigned bitWidth);
-
-    unsigned BitWidth() const { return _bitWidth; }
+protected:
+    ArrayType(const std::shared_ptr<Type> &element_type, const int element_num)
+        : Type(ArrayTyID), element_type_(element_type), element_num_(element_num) {
+    }
 
 private:
-    FloatType(LlvmContextPtr context, unsigned bitWidth)
-        : Type(context, FloatTyID), _bitWidth(bitWidth) {}
-
-    unsigned _bitWidth;
+    std::shared_ptr<Type> element_type_;
+    int element_num_;
 };
 
 /*
@@ -110,6 +87,7 @@ public:
 
     static FunctionTypePtr Get(TypePtr returnType,
                                const std::vector<Type *> &paramTypes);
+
     static FunctionTypePtr Get(TypePtr returnType);
 
     TypePtr ReturnType() const { return _returnType; }
@@ -117,33 +95,14 @@ public:
 
     bool Equals(TypePtr returnType,
                 const std::vector<TypePtr> &paramTypes) const;
+
     bool Equals(TypePtr returnType) const;
 
 private:
     FunctionType(TypePtr returnType, const std::vector<TypePtr> &paramTypes);
+
     FunctionType(TypePtr returnType);
 
     TypePtr _returnType;
     std::vector<TypePtr> _paramTypes;
-};
-
-/*
- * A pointer type represents a pointer to another type.
- * It is mostly used as the return type of alloca instruction.
- */
-class PointerType : public Type {
-    friend class LlvmContext;
-
-public:
-    ~PointerType() override = default;
-
-    void PrintAsm(AsmWriterPtr out) override;
-    static PointerTypePtr Get(TypePtr elementType);
-
-    TypePtr ElementType() const { return _elementType; }
-
-private:
-    PointerType(TypePtr elementType);
-
-    TypePtr _elementType;
 };
