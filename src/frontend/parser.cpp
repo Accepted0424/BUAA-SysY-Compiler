@@ -477,7 +477,7 @@ std::unique_ptr<UnaryExp> Parser::parseUnaryExp() {
         }
 
         unary.expr = parseUnaryExp();
-        unaryExp->unary.push_back(std::move(unary));
+        unaryExp->unary = std::make_unique<UnaryExp::Unary>(std::move(unary));
         printNode("UnaryExp");
         return unaryExp;
     }
@@ -546,7 +546,7 @@ std::unique_ptr<UnaryExp> Parser::parseUnaryExp(std::unique_ptr<LVal> lval) {
         }
 
         unary.expr = parseUnaryExp();
-        unaryExp->unary.push_back(std::move(unary));
+        unaryExp->unary = std::make_unique<UnaryExp::Unary>(std::move(unary));
         printNode("UnaryExp");
         return unaryExp;
     }
@@ -1275,9 +1275,7 @@ std::unique_ptr<FuncDef> Parser::parseFuncDef() {
 
     match(Token::LPARENT);
 
-    if (is(Token::LBRACE)) {
-        match(Token::RPARENT);
-    } else if (!is(Token::RPARENT)) {
+    if (!is(Token::RPARENT)) {
         funcDef->funcFParams = parseFuncFParams();
         match(Token::RPARENT);
     } else {
