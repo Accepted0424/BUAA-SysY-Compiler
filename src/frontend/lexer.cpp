@@ -165,7 +165,7 @@ bool Lexer::lexGeq(Token &token, std::string content) {
 bool Lexer::lexSingleLineComment() {
     char ch = getChar();
     if (ch == '/') {
-        while (ch != '\n') {
+        while (ch != '\n' && ch != EOF) {
             ch = getChar();
         }
         return true;
