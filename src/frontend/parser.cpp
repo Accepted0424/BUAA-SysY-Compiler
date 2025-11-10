@@ -1276,7 +1276,7 @@ std::unique_ptr<FuncDef> Parser::parseFuncDef() {
 
     match(Token::LPARENT);
 
-    if (!is(Token::RPARENT)) {
+    if (!is(Token::RPARENT) && !is(Token::LBRACE)) {
         funcDef->funcFParams = parseFuncFParams();
         match(Token::RPARENT);
     } else {
