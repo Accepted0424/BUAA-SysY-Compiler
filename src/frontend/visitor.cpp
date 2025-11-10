@@ -253,6 +253,7 @@ bool Visitor::visitStmt(const Stmt &stmt, bool isLast) {
                 cur_scope_->getSymbol(stmt.assignStmt.lVal->ident->content)->type == CONST_INT_ARRAY) {
                 ErrorReporter::error(stmt.lineno, ERR_CONST_ASSIGNMENT);
             }
+            visitExp(*stmt.assignStmt.exp);
             break;
         case Stmt::EXP:
             if (stmt.exp != nullptr) {
@@ -445,6 +446,16 @@ void Visitor::visitMainFuncDef(const MainFuncDef &mainFunc) {
 }
 
 void Visitor::visit(const CompUnit &compUnit) {
+    auto context = ir_module_.getContext();
+    auto builtinFuncValue = Function::create(
+        context->getIntegerTy(),
+        "getint",
+        {}
+    );
+    auto builtinSymbol = std::make_shared<IntFuncSymbol>(
+        "getint", builtinFuncValue, std::vector<TypePtr>{}, -1);
+    cur_scope_->addSymbol(builtinSymbol);
+
     for (const auto &var_decl: compUnit.decls) {
         visitDecl(*var_decl);
     }
