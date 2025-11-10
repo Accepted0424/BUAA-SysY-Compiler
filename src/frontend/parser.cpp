@@ -1162,6 +1162,8 @@ std::unique_ptr<Block> Parser::parseBlock() {
         block->blockItems.push_back(parseBlockItem());
     }
 
+    block->lineno = cur_.lineno;
+
     match(Token::RBRACE);
 
     printNode("Block");

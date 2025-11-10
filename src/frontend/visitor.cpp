@@ -347,6 +347,12 @@ void Visitor::visitBlockItem(const BlockItem &blockItem, bool isLast) {
 }
 
 void Visitor::visitBlock(const Block &block, bool isFuncBlock) {
+    if (block.blockItems.empty()) {
+        if (isFuncBlock && !cur_func_->getReturnType()->is(Type::VoidTyID)) {
+            ErrorReporter::error(block.lineno, ERR_NONVOID_FUNC_MISSING_RETURN);
+        }
+        return;
+    }
     for (const auto &blockItem: block.blockItems) {
         visitBlockItem(*blockItem, isFuncBlock && (&blockItem == &block.blockItems.back()));
     }
