@@ -47,6 +47,10 @@ std::shared_ptr<Value> Visitor::visitUnaryExp(const UnaryExp &unaryExp) {
             }
 
             auto symbol = cur_scope_->getFuncSymbol(unaryExp.call->ident->content);
+            if (symbol == nullptr) {
+                ErrorReporter::error(unaryExp.lineno, ERR_UNDEFINED_NAME);
+                return nullptr;
+            }
             std::vector<std::shared_ptr<Value>> args;
 
             if (unaryExp.call->params) {
@@ -398,11 +402,14 @@ void Visitor::visitFuncDef(const FuncDef &funcDef) {
             // Btype is always 'int'
             std::shared_ptr<Symbol> sym;
             if (!param->isArray) {
+                auto allocaValue = AllocaInst::create(context->getIntegerTy());
                 sym = std::make_shared<IntSymbol>(
-                    param->ident->content, nullptr, param->lineno);
+                    param->ident->content, allocaValue, param->lineno);
             } else {
+                auto elementTy = context->getIntegerTy();
+                auto allocaValue = AllocaInst::create(context->getArrayTy(elementTy));
                 sym = std::make_shared<IntArraySymbol>(
-                    param->ident->content, nullptr, param->lineno);
+                    param->ident->content, allocaValue, param->lineno);
             }
             cur_scope_->addSymbol(sym);
         }
