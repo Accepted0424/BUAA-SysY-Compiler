@@ -60,9 +60,9 @@ private:
 
     void visitForStmt(const ForStmt &forStmt);
 
-    void visitStmt(const Stmt &stmt, bool isLast);
+    bool visitStmt(const Stmt &stmt, bool isLast);
 
-    void visitBlockItem(const BlockItem &blockItem, bool isLast);
+    bool visitBlockItem(const BlockItem &blockItem, bool isLast);
 
     void visitBlock(const Block &block, bool isFuncBlock);
 };

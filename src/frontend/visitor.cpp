@@ -42,10 +42,6 @@ std::shared_ptr<Value> Visitor::visitUnaryExp(const UnaryExp &unaryExp) {
             return visitPrimaryExp(*unaryExp.primary);
 
         case UnaryExp::CALL: {
-            if (!cur_scope_->existInSymTable(unaryExp.call->ident->content)) {
-                ErrorReporter::error(unaryExp.lineno, ERR_UNDEFINED_NAME);
-            }
-
             auto symbol = cur_scope_->getFuncSymbol(unaryExp.call->ident->content);
             if (symbol == nullptr) {
                 ErrorReporter::error(unaryExp.lineno, ERR_UNDEFINED_NAME);
@@ -244,15 +240,14 @@ void Visitor::visitForStmt(const ForStmt &forStmt) {
     }
 }
 
-void Visitor::visitStmt(const Stmt &stmt, bool isLast) {
-    if (isLast && !cur_func_->getReturnType()->is(Type::VoidTyID) && stmt.kind != Stmt::RETURN) {
-        ErrorReporter::error(stmt.lineno, ERR_NONVOID_FUNC_MISSING_RETURN);
-    }
+bool Visitor::visitStmt(const Stmt &stmt, bool isLast) {
+    bool hasReturn = false;
 
     switch (stmt.kind) {
         case Stmt::ASSIGN:
             if (!cur_scope_->existInSymTable(stmt.assignStmt.lVal->ident->content)) {
                 ErrorReporter::error(stmt.lineno, ERR_UNDEFINED_NAME);
+                break;
             }
             if (cur_scope_->getSymbol(stmt.assignStmt.lVal->ident->content)->type == CONST_INT ||
                 cur_scope_->getSymbol(stmt.assignStmt.lVal->ident->content)->type == CONST_INT_ARRAY) {
@@ -301,12 +296,13 @@ void Visitor::visitStmt(const Stmt &stmt, bool isLast) {
         case Stmt::RETURN:
             if (stmt.returnExp != nullptr) {
                 auto returnExpValue = visitExp(*stmt.returnExp);
+                hasReturn = true;
                 if (cur_func_->getReturnType()->is(Type::VoidTyID) && !returnExpValue->getType()->is(Type::VoidTyID)) {
                     ErrorReporter::error(stmt.lineno, ERR_VOID_FUNC_RETURN_MISMATCH);
                 }
             } else {
                 if (!cur_func_->getReturnType()->is(Type::VoidTyID)) {
-                    ErrorReporter::error(stmt.lineno, ERR_NONVOID_FUNC_MISSING_RETURN);
+                    // ErrorReporter::error(stmt.lineno, ERR_NONVOID_FUNC_MISSING_RETURN);
                 }
             }
             break;
@@ -328,9 +324,11 @@ void Visitor::visitStmt(const Stmt &stmt, bool isLast) {
             }
             break;
     }
+    return hasReturn;
 }
 
-void Visitor::visitBlockItem(const BlockItem &blockItem, bool isLast) {
+bool Visitor::visitBlockItem(const BlockItem &blockItem, bool isLast) {
+    bool hasReturn = false;
     switch (blockItem.kind) {
         case BlockItem::DECL:
             if (isLast && !cur_func_->getReturnType()->is(Type::VoidTyID)) {
@@ -339,11 +337,12 @@ void Visitor::visitBlockItem(const BlockItem &blockItem, bool isLast) {
             visitDecl(*blockItem.decl);
             break;
         case BlockItem::STMT:
-            visitStmt(*blockItem.stmt, isLast);
+            hasReturn = visitStmt(*blockItem.stmt, isLast);
             break;
         default:
             LOG_ERROR("Unreachable in Visitor::visitBlockItem");
     }
+    return hasReturn;
 }
 
 void Visitor::visitBlock(const Block &block, bool isFuncBlock) {
@@ -353,8 +352,16 @@ void Visitor::visitBlock(const Block &block, bool isFuncBlock) {
         }
         return;
     }
+
     for (const auto &blockItem: block.blockItems) {
-        visitBlockItem(*blockItem, isFuncBlock && (&blockItem == &block.blockItems.back()));
+        if (isFuncBlock && (&blockItem == &block.blockItems.back())) {
+            bool hasReturn = visitBlockItem(*blockItem, true);
+            if (!hasReturn && !cur_func_->getReturnType()->is(Type::VoidTyID)) {
+                ErrorReporter::error(block.lineno, ERR_NONVOID_FUNC_MISSING_RETURN);
+            }
+        } else {
+            visitBlockItem(*blockItem, false);
+        }
     }
 }
 
