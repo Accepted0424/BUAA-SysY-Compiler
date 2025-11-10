@@ -256,7 +256,9 @@ void Visitor::visitStmt(const Stmt &stmt, bool isLast) {
             }
             break;
         case Stmt::EXP:
-            visitExp(*stmt.exp);
+            if (stmt.exp != nullptr) {
+                visitExp(*stmt.exp);
+            }
             break;
         case Stmt::BLOCK:
             cur_scope_ = cur_scope_->pushScope();
@@ -264,6 +266,12 @@ void Visitor::visitStmt(const Stmt &stmt, bool isLast) {
             cur_scope_ = cur_scope_->popScope();
             break;
         case Stmt::IF:
+            if (stmt.ifStmt.thenStmt != nullptr) {
+                visitStmt(*stmt.ifStmt.thenStmt, false);
+            }
+            if (stmt.ifStmt.elseStmt != nullptr) {
+                visitStmt(*stmt.ifStmt.elseStmt, false);
+            }
             break;
         case Stmt::FOR:
             inForLoop_ = true;
