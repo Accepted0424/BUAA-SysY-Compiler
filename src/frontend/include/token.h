@@ -55,7 +55,7 @@ struct Token {
 
     static const std::unordered_map<TokenType, std::string>& getTypeMap() {
         static const std::unordered_map<TokenType, std::string> type2String{
-#define X(a, b) {TokenType::a, #a},
+#define X(a, b) {TokenType::a, b},
             TOKEN_TYPE
 #undef X
         };

@@ -128,7 +128,7 @@ namespace AstNode {
             std::unique_ptr<UnaryOp> op;
             std::unique_ptr<UnaryExp> expr;
         };
-        std::vector<Unary> unary;          // UNARY_OP
+        std::unique_ptr<Unary> unary;          // UNARY_OP
 
         // void print(std::ostream &out) override;
     };
@@ -212,7 +212,7 @@ namespace AstNode {
     struct FuncFParam : Node {
         std::unique_ptr<Btype> btype;
         std::unique_ptr<Ident> ident;
-        std::unique_ptr<ConstExp> constExp; // for array size, can be null
+        bool isArray;
 
         // void print(std::ostream &out) override;
     };
@@ -311,8 +311,6 @@ namespace AstNode {
             std::string str;
             std::vector<std::unique_ptr<Exp>> args;
         } printfStmt;
-
-        std::unique_ptr<Printf> printf;
 
         // void print(std::ostream &out) override;
     };

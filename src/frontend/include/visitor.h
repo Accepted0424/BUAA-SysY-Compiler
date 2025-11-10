@@ -5,7 +5,6 @@
 #include "ast.h"
 #include "symtable.h"
 #include "llvm/include/ir/module.h"
-#include "llvm/include/ir/value/BasicBlock.h"
 #include "llvm/include/ir/value/Function.h"
 #include "llvm/include/ir/value/Value.h"
 
@@ -15,38 +14,55 @@ class Visitor {
 public:
     Visitor(Module &module)
         : ir_module_(module),
-          cur_scope_(std::make_shared<SymbolTable>(nullptr)) {}
+          cur_scope_(std::make_shared<SymbolTable>()) {}
+
+    Visitor(Module &module, std::ofstream& out)
+        : out_(out),
+          ir_module_(module),
+          cur_scope_(std::make_shared<SymbolTable>(out)) {}
 
     void visit(const CompUnit &node);
 
 private:
+    std::optional<std::reference_wrapper<std::ofstream>> out_;
+
     Module &ir_module_;
 
     std::shared_ptr<SymbolTable> cur_scope_;
 
-    Function* cur_func_ = nullptr;
+    FunctionPtr cur_func_ = nullptr;
 
-    BasicBlock* cur_block_ = nullptr;
+    // BasicBlockPtr cur_block_ = nullptr;
+
+    bool inForLoop_ = false;
 
     void visitFuncDef(const FuncDef &node);
 
     void visitMainFuncDef(const MainFuncDef &mainFunc);
 
+    std::shared_ptr<Value> visitPrimaryExp(const PrimaryExp &primaryExp);
+
+    std::shared_ptr<Value> visitUnaryExp(const UnaryExp &unaryExp);
+
     std::shared_ptr<Value> visitMulExp(const MulExp &mulExp);
 
     std::shared_ptr<Value> visitAddExp(const AddExp &addExp);
 
+    std::shared_ptr<ConstantInt> visitConstExp(const ConstExp &constExp);
+
     std::shared_ptr<Value> visitExp(const Exp &exp);
 
-    int evaluateConstExp(const ConstExp &constExp);
+    void visitConstDecl(const ConstDecl &constDecl);
 
-    void visitConstDef(const ConstDef &constDef);
+    void visitVarDecl(const VarDecl &varDecl);
 
-    void visitDecl(const Decl &elm);
+    void visitDecl(const Decl &decl);
 
-    void visitStmt(const Stmt &stmt);
+    void visitForStmt(const ForStmt &forStmt);
 
-    void visitBlockItem(const BlockItem &blockItem);
+    void visitStmt(const Stmt &stmt, bool isLast);
 
-    void visitBlock(const Block &block);
+    void visitBlockItem(const BlockItem &blockItem, bool isLast);
+
+    void visitBlock(const Block &block, bool isFuncBlock);
 };

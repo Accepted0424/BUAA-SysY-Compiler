@@ -12,6 +12,5 @@ public:
         return type >= ValueType::ConstantTy && type <= ValueType::GlobalVariableTy;
     }
 
-protected:
     Constant(ValueType valueType, TypePtr type) : Value(valueType, type) {}
 };

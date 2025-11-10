@@ -1,6 +1,5 @@
 #pragma once
 
-#include "llvm/include/ir/SlotTracker.h"
 #include "GlobalValue.h"
 #include "BasicBlock.h"
 
@@ -10,38 +9,24 @@ class Function final : public GlobalValue {
 public:
     ~Function() override = default;
 
-    BasicBlock* NewBasicBlock();
-
-    static Function* create(LlvmContext &context, Type* returnType, const std::string &name);
-
-    static Function* create(LlvmContext &context, Type* returnType, const std::string &name,
-                       std::vector<Argument*> args);
-
-    using block_iterator = std::list<BasicBlock*>::iterator;
-
-    using argument_iterator = std::vector<Argument*>::iterator;
-
-    // Insert a basic block at the end of the function.
-    Function* InsertBasicBlock(BasicBlock* block);
-    // Insert a basic block before the specified iterator.
-    Function* InsertBasicBlock(block_iterator iter, BasicBlock* block);
-    // Remove a basic block from the function.
-    Function* RemoveBasicBlock(BasicBlock* block);
-
-    block_iterator BasicBlockBegin() { return basicBlocks_.begin(); }
-
-    block_iterator BasicBlockEnd() { return basicBlocks_.end(); }
-
-private:
-    Function(Type* type, const std::string &name)
+    Function(const TypePtr &type, const std::string &name)
         : GlobalValue(ValueType::FunctionTy, type, name), returnType_(type) {}
 
-    Function(Type* type, const std::string &name, std::vector<Argument*> &args)
+    Function(const TypePtr &type, const std::string &name, const std::vector<ArgumentPtr> &args)
         : GlobalValue(ValueType::FunctionTy, type, name), returnType_(type), args_(args) {}
 
-    Type* returnType_;
+    static FunctionPtr create(TypePtr returnType, const std::string &name);
 
-    std::vector<Argument*> args_;
+    static FunctionPtr create(TypePtr returnType, const std::string &name, std::vector<ArgumentPtr> args) {
+        return std::make_shared<Function>(returnType, name, args);
+    }
 
-    std::list<BasicBlock*> basicBlocks_;
+    TypePtr getReturnType() const { return returnType_; }
+
+private:
+    TypePtr returnType_;
+
+    std::vector<ArgumentPtr> args_;
+
+    std::list<BasicBlockPtr> basicBlocks_;
 };

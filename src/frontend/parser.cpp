@@ -6,7 +6,9 @@
 
 void Parser::printNode(std::string node) {
     std::cout << '<' << node << '>' << std::endl;
-    out_->get() << '<' << node << '>' << std::endl;
+    if (out_) {
+        out_->get() << '<' << node << '>' << std::endl;
+    }
 }
 
 void Parser::getToken() {
@@ -1105,16 +1107,15 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
         match(Token::PRINTFTK);
         match(Token::LPARENT);
         stmt->kind = Stmt::PRINTF;
-        stmt->printf = std::make_unique<Stmt::Printf>();
         if (is(Token::STRCON)) {
-            stmt->printf->str = cur_.content;
+            stmt->printfStmt.str = cur_.content;
             match(Token::STRCON);
         } else {
             ErrorReporter::error(cur_.lineno, "[Parser] missing StringConst in Printf");
         }
         while (is(Token::COMMA)) {
             match(Token::COMMA);
-            stmt->printf->args.push_back(parseExp());
+            stmt->printfStmt.args.push_back(parseExp());
         }
         match(Token::RPARENT);
         match(Token::SEMICN);
@@ -1229,9 +1230,7 @@ std::unique_ptr<FuncFParam> Parser::parseFuncFParam() {
     if (is(Token::LBRACK)) {
         match(Token::LBRACK);
 
-        if (!is(Token::RBRACK)) {
-            funcFParam->constExp = parseConstExp();
-        }
+        funcFParam->isArray = true;
 
         match(Token::RBRACK);
     }

@@ -8,4 +8,8 @@ if [ "$1" == "release" ]; then
   if [ "$2" == "hw3" ]; then
     zip -r hw3.zip src CMakeLists.txt config.json myCompiler.sh test
   fi
+
+  if [ "$2" == "hw4" ]; then
+    zip -r hw4.zip src CMakeLists.txt config.json myCompiler.sh
+  fi
 fi

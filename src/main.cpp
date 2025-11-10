@@ -41,19 +41,20 @@ void semanticAnalyse(std::ifstream& file, std::ofstream& out) {
     LlvmContext context;
     auto module = Module("main", context);
 
-    auto visitor = Visitor(module);
+    auto visitor = Visitor(module, out);
     visitor.visit(*root);
 }
 
 int main(int argc, char *argv[]) {
     std::ifstream infile("testfile.txt", std::ios::in);
-    std::ofstream outfile("parser.txt", std::ios::out);
+    std::ofstream outfile("symbol.txt", std::ios::out);
     std::ofstream errorfile("error.txt", std::ios::out);
 
     Logger::instance().setLevel(LogLevel::RELEASE);
 
     // lex(infile, outfile);
     // parse(infile, outfile);
+    semanticAnalyse(infile, outfile);
 
     ErrorReporter::get().dump(errorfile);
 

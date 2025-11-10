@@ -1,6 +1,5 @@
 #pragma once
 
-#include "llvm/asm/AsmWriter.h"
 #include <utility>
 
 #include "llvm/include/ir/value/Value.h"
@@ -26,6 +25,10 @@ public:
     // Always use virtual destructor for base class.
     virtual ~Type() = default;
 
+    bool is(TypeID id) const {
+        return typeId_ == id;
+    }
+
 protected:
     Type(TypeID typeId)
         : typeId_(typeId) {
@@ -33,6 +36,15 @@ protected:
 
 private:
     TypeID typeId_;
+};
+
+class VoidType : public Type {
+    friend class LlvmContext;
+
+public:
+    ~VoidType() override = default;
+
+    VoidType() : Type(VoidTyID) {}
 };
 
 /*
@@ -45,7 +57,6 @@ class IntegerType : public Type {
 public:
     ~IntegerType() override = default;
 
-protected:
     IntegerType(unsigned bitWidth)
         : Type(IntegerTyID), _bitWidth(bitWidth) {
     }
@@ -63,9 +74,12 @@ class ArrayType : public Type {
 public:
     ~ArrayType() override = default;
 
-protected:
     ArrayType(const std::shared_ptr<Type> &element_type, const int element_num)
         : Type(ArrayTyID), element_type_(element_type), element_num_(element_num) {
+    }
+
+    ArrayType(const std::shared_ptr<Type> &element_type)
+        : Type(ArrayTyID), element_type_(element_type), element_num_(-1) {
     }
 
 private:
@@ -83,20 +97,9 @@ class FunctionType : public Type {
 public:
     ~FunctionType() override = default;
 
-    void PrintAsm(AsmWriterPtr out) override;
-
-    static FunctionTypePtr Get(TypePtr returnType,
-                               const std::vector<Type *> &paramTypes);
-
-    static FunctionTypePtr Get(TypePtr returnType);
-
     TypePtr ReturnType() const { return _returnType; }
+
     const std::vector<TypePtr> &ParamTypes() const { return _paramTypes; }
-
-    bool Equals(TypePtr returnType,
-                const std::vector<TypePtr> &paramTypes) const;
-
-    bool Equals(TypePtr returnType) const;
 
 private:
     FunctionType(TypePtr returnType, const std::vector<TypePtr> &paramTypes);

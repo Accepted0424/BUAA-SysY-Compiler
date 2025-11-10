@@ -3,21 +3,13 @@
 #include "llvm/include/ir/value/Value.h"
 #include <list>
 
-#include "llvm/include/ir/HasParent.h"
-
-class BasicBlock : public Value, public HasParent<Function> {
+class BasicBlock : public Value {
 public:
     ~BasicBlock() override = default;
 
     static bool classof(const ValueType type) {
         return type == ValueType::BasicBlockTy;
     }
-
-    void PrintAsm(AsmWriterPtr out) override;
-
-    void PrintName(AsmWriterPtr out) override;
-
-    void PrintUse(AsmWriterPtr out) override;
 
     static BasicBlockPtr New(FunctionPtr parent = nullptr);
 

@@ -1,11 +1,12 @@
 #pragma once
 
-#include "llvm/include/ir/HasParent.h"
 #include "llvm/include/ir/value/User.h"
 
 class Instruction : public User {
 public:
     ~Instruction() override = default;
+
+    Instruction(ValueType valueType, TypePtr type) : User(valueType, type) {}
 };
 
 // an instruction to allocate memory on the stack
@@ -13,10 +14,12 @@ class AllocaInst : public Instruction {
 public:
     ~AllocaInst() override = default;
 
-    static std::shared_ptr<AllocaInst> create(std::shared_ptr<Type> type);
+    static std::shared_ptr<AllocaInst> create(std::shared_ptr<Type> type) {
+        return std::make_shared<AllocaInst>(type);
+    }
 
-private:
-    AllocaInst();
+    AllocaInst(std::shared_ptr<Type> type)
+        : Instruction(ValueType::AllocaInstTy, type) {};
 };
 
 class StoreInst : public Instruction {
@@ -26,30 +29,29 @@ public:
     static std::shared_ptr<StoreInst> create(std::shared_ptr<Type> type,
         std::shared_ptr<Value> value, std::shared_ptr<Value> address);
 
-private:
     StoreInst();
 };
 
 class LoadInst : public Instruction {
+public:
     ~LoadInst() override = default;
 
     static std::shared_ptr<LoadInst> create(std::shared_ptr<Type> type,
         std::shared_ptr<Value> address);
 
-private:
     LoadInst();
 };
 
-class AddInst : public Instruction {
-    ~AddInst() override = default;
+class CallInst : public Instruction {
+public:
+    ~CallInst() override = default;
 
-    static std::shared_ptr<AddInst> create(std::shared_ptr<Type> type,
-        std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs);
+    static std::shared_ptr<CallInst> create(std::shared_ptr<Function> function,
+        const std::vector<std::shared_ptr<Value>> &args) {
+        return std::make_shared<CallInst>(function, args);
+    }
 
-private:
-    AddInst(const std::shared_ptr<Value> &lhs, const std::shared_ptr<Value> &rhs)
-        : Instruction(), lhs(lhs), rhs(rhs) {}
-
-    std::shared_ptr<Value> lhs;
-    std::shared_ptr<Value> rhs;
-}
+    CallInst(std::shared_ptr<Function> function,
+        const std::vector<std::shared_ptr<Value>> &args):
+    Instruction(ValueType::CallInstTy, function->getReturnType()) {};
+};

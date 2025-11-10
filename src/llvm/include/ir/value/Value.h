@@ -1,11 +1,8 @@
 #pragma once
 
-#include <list>
 #include <string>
+#include <utility>
 
-#include "llvm/include/ir/type.h"
-
-// All types used in LLVM for tolang.
 enum class ValueType {
     // Value
     ArgumentTy,
@@ -14,6 +11,8 @@ enum class ValueType {
     // Value -> Constant
     ConstantTy,
     ConstantDataTy,
+    ConstantIntTy,
+    ConstantArrayTy,
 
     // Value -> Constant -> GlobalValue
     FunctionTy,
@@ -34,7 +33,6 @@ enum class ValueType {
     UnaryOperatorTy,
 };
 
-// Base class for all values in LLVM.
 class Value {
 public:
     // Always use virtual destructor for base class.
@@ -44,7 +42,7 @@ public:
         return value_type_;
     }
 
-    std::shared_ptr<Type> getType() const {
+    TypePtr getType() const {
         return type_;
     }
 
@@ -57,15 +55,15 @@ public:
     }
 
 protected:
-    std::shared_ptr<Type> type_;
+    TypePtr type_;
 
     std::string name_;
 
-    Value(ValueType valueType, std::shared_ptr<Type> type)
-        : type_(type), value_type_(valueType) {}
+    Value(ValueType valueType, TypePtr type)
+        : type_(std::move(type)), value_type_(valueType) {}
 
-    Value(ValueType ValueType, std::shared_ptr<Type> type, const std::string &name)
-        : type_(type), name_(name), value_type_(ValueType) {}
+    Value(ValueType ValueType, TypePtr type, std::string name)
+        : type_(std::move(type)), name_(std::move(name)), value_type_(ValueType) {}
 
 private:
     ValueType value_type_;

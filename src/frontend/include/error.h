@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <algorithm>
 
 // lexer errors
 #define ERR_ILLEGAL_SYMBOL               "a" // 非法符号

@@ -1,8 +1,6 @@
 #pragma once
 
 #include "User.h"
-#include "llvm/include/ir/llvmContext.h"
-#include "llvm/ir/value/Constant.h"
 
 /*
  * GlobalValue is a base class for all top-level components in a module.
@@ -17,8 +15,6 @@ public:
         return ValueType::FunctionTy <= type &&
                type <= ValueType::GlobalVariableTy;
     }
-
-    void PrintName(AsmWriterPtr out) override;
 
 protected:
     GlobalValue(ValueType valueType, TypePtr type, const std::string &name)
