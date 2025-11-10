@@ -198,6 +198,7 @@ public:
         // 按序打印
         for (const auto& scope : allScopes) {
             for (const auto& sym : scope->ordered_) {
+                if (sym->name == "getint") continue;
                 std::string typeStr = symbolTypeToString(sym->type);
                 out_->get() << scope->id_ << " " << sym->name << " " << typeStr << std::endl;
                 std::cout << scope->id_ << " " << sym->name << " " << typeStr << std::endl;
