@@ -942,12 +942,12 @@ std::unique_ptr<LOrExp> Parser::parseLOrExp() {
     auto lOrExp = std::make_unique<LOrExp>();
     lOrExp->lineno = cur_.lineno;
 
-    lOrExp->eqExps.push_back(parseLAndExp());
+    lOrExp->lAndExps.push_back(parseLAndExp());
 
     while (is(Token::OR)) {
         printNode("LOrExp");
         match(Token::OR);
-        lOrExp->eqExps.push_back(parseLAndExp());
+        lOrExp->lAndExps.push_back(parseLAndExp());
     }
 
     printNode("LOrExp");
@@ -1095,7 +1095,7 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
     if (is(Token::RETURNTK)) {
         match(Token::RETURNTK);
         stmt->kind = Stmt::RETURN;
-        if (!is(Token::SEMICN)) {
+        if (!is(Token::SEMICN) && !is(Token::RBRACE)) {
             stmt->returnExp = parseExp();
         }
         match(Token::SEMICN);

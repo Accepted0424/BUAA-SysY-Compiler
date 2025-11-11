@@ -261,7 +261,7 @@ namespace AstNode {
     };
 
     struct LOrExp : Node {
-        std::vector<std::unique_ptr<LAndExp>> eqExps;
+        std::vector<std::unique_ptr<LAndExp>> lAndExps;
 
         // void print(std::ostream &out) override;
     };

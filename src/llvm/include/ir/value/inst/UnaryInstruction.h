@@ -18,7 +18,7 @@ protected:
         : Instruction(valueType, type) {};
 };
 
-enum class UnaryOpType { Not, Neg, Pos };
+enum class UnaryOpType { NOT, NEG, POS };
 
 class UnaryOperator final : public UnaryInstruction {
 public:

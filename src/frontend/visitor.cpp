@@ -53,17 +53,18 @@ std::shared_ptr<Value> Visitor::visitUnaryExp(const UnaryExp &unaryExp) {
                 // check params count
                 if (unaryExp.call->params->params.size() != symbol->getParamCnt()) {
                     ErrorReporter::error(unaryExp.lineno, ERR_FUNC_ARG_COUNT_MISMATCH);
-                }
-
-                // check params type
-                for (size_t i = 0; i < unaryExp.call->params->params.size(); ++i) {
-                    auto expValue = visitExp(*unaryExp.call->params->params[i]);
-                    auto paramType = symbol->params[i];
-                    // TODO: const array
-                    if (paramType != expValue->getType()) {
-                        ErrorReporter::error(unaryExp.lineno, ERR_FUNC_ARG_TYPE_MISMATCH);
+                } else {
+                    // check params type
+                    for (size_t i = 0; i < unaryExp.call->params->params.size(); ++i) {
+                        auto expValue = visitExp(*unaryExp.call->params->params[i]);
+                        auto paramType = symbol->params[i];
+                        // TODO: const array
+                        if (paramType != expValue->getType() || (expValue->getValueType() == ValueType::ConstantArrayTy)) {
+                            ErrorReporter::error(unaryExp.lineno, ERR_FUNC_ARG_TYPE_MISMATCH);
+                            break;
+                        }
+                        args.push_back(expValue);
                     }
-                    args.push_back(expValue);
                 }
             }
             return CallInst::create(std::dynamic_pointer_cast<Function>(symbol->value), args);
@@ -74,11 +75,11 @@ std::shared_ptr<Value> Visitor::visitUnaryExp(const UnaryExp &unaryExp) {
             auto rhs = visitUnaryExp(*unaryExp.unary->expr);
             switch (unaryExp.unary->op->kind) {
                 case UnaryOp::PLUS:
-                    return UnaryOperator::create(UnaryOpType::Pos, rhs);
+                    return UnaryOperator::create(UnaryOpType::POS, rhs);
                 case UnaryOp::MINU:
-                    return UnaryOperator::create(UnaryOpType::Neg, rhs);
+                    return UnaryOperator::create(UnaryOpType::NEG, rhs);
                 case UnaryOp::NOT:
-                    return UnaryOperator::create(UnaryOpType::Not, rhs);
+                    return UnaryOperator::create(UnaryOpType::NOT, rhs);
                 default:
                     LOG_ERROR("Unreachable in Visitor::visitUnaryExp");
                     return nullptr;
@@ -94,13 +95,13 @@ std::shared_ptr<Value> Visitor::visitMulExp(const MulExp &mulExp) {
         auto rhsVal = visitUnaryExp(*rhs);
         switch (op) {
             case MulExp::MULT:
-                lhs = BinaryOperator::create(BinaryOpType::Mul, lhs, rhsVal);
+                lhs = BinaryOperator::create(BinaryOpType::MUL, lhs, rhsVal);
                 break;
             case MulExp::DIV:
-                lhs = BinaryOperator::create(BinaryOpType::Div, lhs, rhsVal);
+                lhs = BinaryOperator::create(BinaryOpType::DIV, lhs, rhsVal);
                 break;
             case MulExp::MOD:
-                lhs = BinaryOperator::create(BinaryOpType::Mod, lhs, rhsVal);
+                lhs = BinaryOperator::create(BinaryOpType::MOD, lhs, rhsVal);
                 break;
         }
     }
@@ -113,10 +114,10 @@ std::shared_ptr<Value> Visitor::visitAddExp(const AddExp &addExp) {
         auto rhsVal = visitMulExp(*rhs);
         switch (op) {
             case AddExp::PLUS:
-                lhs = BinaryOperator::create(BinaryOpType::Add, lhs, rhsVal);
+                lhs = BinaryOperator::create(BinaryOpType::ADD, lhs, rhsVal);
                 break;
             case AddExp::MINU:
-                lhs = BinaryOperator::create(BinaryOpType::Sub, lhs, rhsVal);
+                lhs = BinaryOperator::create(BinaryOpType::SUB, lhs, rhsVal);
                 break;
         }
     }
@@ -231,6 +232,90 @@ void Visitor::visitDecl(const Decl &decl) {
     }
 }
 
+std::shared_ptr<Value> Visitor::visitRelExp(const RelExp &relExp) {
+    auto lhs = visitAddExp(*relExp.addExpFirst);
+    if (lhs == nullptr) {
+        return nullptr;
+    }
+    for (const auto &[op, rhs] : relExp.addExpRest) {
+        auto rhsVal = visitAddExp(*rhs);
+        if (rhsVal == nullptr) {
+            return nullptr;
+        }
+        switch (op) {
+            case RelExp::LSS:
+                lhs = CompareOperator::create(CompareOpType::LSS, lhs, rhsVal);
+                break;
+            case RelExp::GRE:
+                lhs = CompareOperator::create(CompareOpType::GRE, lhs, rhsVal);
+                break;
+            case RelExp::LEQ:
+                lhs = CompareOperator::create(CompareOpType::LEQ, lhs, rhsVal);
+                break;
+            case RelExp::GEQ:
+                lhs = CompareOperator::create(CompareOpType::GEQ, lhs, rhsVal);
+                break;
+        }
+    }
+    return lhs;
+}
+
+std::shared_ptr<Value> Visitor::visitEqExp(const EqExp &eqExp) {
+    auto lhs = visitRelExp(*eqExp.relExpFirst);
+    if (lhs == nullptr) {
+        return nullptr;
+    }
+    for (const auto &[op, rhs] : eqExp.relExpRest) {
+        auto rhsVal = visitRelExp(*rhs);
+        if (rhsVal == nullptr) {
+            return nullptr;
+        }
+        switch (op) {
+            case EqExp::EQL:
+                lhs = CompareOperator::create(CompareOpType::EQL, lhs, rhsVal);
+                break;
+            case EqExp::NEQ:
+                lhs = CompareOperator::create(CompareOpType::NEQ, lhs, rhsVal);
+                break;
+        }
+    }
+    return lhs;
+}
+
+std::shared_ptr<Value> Visitor::visitLAndExp(const LAndExp &lAndExp) {
+    auto lhs = visitEqExp(*lAndExp.eqExps[0]);
+    if (lhs == nullptr) {
+        return nullptr;
+    }
+    for (size_t i = 1; i < lAndExp.eqExps.size(); ++i) {
+        auto rhs = visitEqExp(*lAndExp.eqExps[i]);
+        if (rhs == nullptr) {
+            return nullptr;
+        }
+        lhs = LogicalOperator::create(LogicalOpType::AND, lhs, rhs);
+    }
+    return lhs;
+}
+
+std::shared_ptr<Value> Visitor::visitLOrExp(const LOrExp &lOrExp) {
+    auto lhs = visitLAndExp(*lOrExp.lAndExps[0]);
+    if (lhs == nullptr) {
+        return nullptr;
+    }
+    for (size_t i = 1; i < lOrExp.lAndExps.size(); ++i) {
+        auto rhs = visitLAndExp(*lOrExp.lAndExps[i]);
+        if (rhs == nullptr) {
+            return nullptr;
+        }
+        lhs = LogicalOperator::create(LogicalOpType::OR, lhs, rhs);
+    }
+    return lhs;
+}
+
+std::shared_ptr<Value> Visitor::visitCond(const Cond &cond) {
+    return visitLOrExp(*cond.lOrExp);
+}
+
 void Visitor::visitForStmt(const ForStmt &forStmt) {
     for (const auto &[lVal, exp] : forStmt.assigns) {
         if (cur_scope_->getSymbol(lVal->ident->content)->type == CONST_INT ||
@@ -266,6 +351,9 @@ bool Visitor::visitStmt(const Stmt &stmt, bool isLast) {
             cur_scope_ = cur_scope_->popScope();
             break;
         case Stmt::IF:
+            if (stmt.ifStmt.cond != nullptr) {
+                visitCond(*stmt.ifStmt.cond);
+            }
             if (stmt.ifStmt.thenStmt != nullptr) {
                 visitStmt(*stmt.ifStmt.thenStmt, false);
             }
@@ -277,6 +365,9 @@ bool Visitor::visitStmt(const Stmt &stmt, bool isLast) {
             inForLoop_ = true;
             if (stmt.forStmt.forStmtFirst != nullptr) {
                 visitForStmt(*stmt.forStmt.forStmtFirst);
+            }
+            if (stmt.forStmt.cond != nullptr) {
+                visitCond(*stmt.forStmt.cond);
             }
             if (stmt.forStmt.forStmtSecond != nullptr) {
                 visitForStmt(*stmt.forStmt.forStmtSecond);
@@ -332,9 +423,6 @@ bool Visitor::visitBlockItem(const BlockItem &blockItem, bool isLast) {
     bool hasReturn = false;
     switch (blockItem.kind) {
         case BlockItem::DECL:
-            if (isLast && !cur_func_->getReturnType()->is(Type::VoidTyID)) {
-                ErrorReporter::error(blockItem.lineno, ERR_NONVOID_FUNC_MISSING_RETURN);
-            }
             visitDecl(*blockItem.decl);
             break;
         case BlockItem::STMT:
@@ -367,11 +455,6 @@ void Visitor::visitBlock(const Block &block, bool isFuncBlock) {
 }
 
 void Visitor::visitFuncDef(const FuncDef &funcDef) {
-    // check functionDef redefinition in current scope
-    if (cur_scope_->existInSymTable(funcDef.ident->content)) {
-        ErrorReporter::error(funcDef.lineno, ERR_REDEFINED_NAME);
-    }
-
     auto context = ir_module_.getContext();
 
     std::vector<ArgumentPtr> paramArgs;

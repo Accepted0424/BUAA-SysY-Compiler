@@ -58,6 +58,16 @@ private:
 
     void visitDecl(const Decl &decl);
 
+    std::shared_ptr<Value> visitRelExp(const RelExp &relExp);
+
+    std::shared_ptr<Value> visitEqExp(const EqExp &eqExp);
+
+    std::shared_ptr<Value> visitLAndExp(const LAndExp &lAndExp);
+
+    std::shared_ptr<Value> visitLOrExp(const LOrExp &lOrExp);
+
+    std::shared_ptr<Value> visitCond(const Cond &cond);
+
     void visitForStmt(const ForStmt &forStmt);
 
     bool visitStmt(const Stmt &stmt, bool isLast);

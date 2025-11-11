@@ -21,6 +21,7 @@ enum class ValueType {
     // Value -> User -> Instruction
     BinaryOperatorTy,
     CompareInstTy,
+    LogicalInstTy,
     BranchInstTy,
     JumpInstTy,
     ReturnInstTy,
