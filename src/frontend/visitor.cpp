@@ -318,8 +318,12 @@ std::shared_ptr<Value> Visitor::visitCond(const Cond &cond) {
 
 void Visitor::visitForStmt(const ForStmt &forStmt) {
     for (const auto &[lVal, exp] : forStmt.assigns) {
+        if (!cur_scope_->existInSymTable(lVal->ident->content)) {
+            ErrorReporter::error(lVal->lineno, ERR_UNDEFINED_NAME);
+            break;
+        }
         if (cur_scope_->getSymbol(lVal->ident->content)->type == CONST_INT ||
-                cur_scope_->getSymbol(lVal->ident->content)->type == CONST_INT_ARRAY) {
+            cur_scope_->getSymbol(lVal->ident->content)->type == CONST_INT_ARRAY) {
             ErrorReporter::error(forStmt.lineno, ERR_CONST_ASSIGNMENT);
         }
     }
