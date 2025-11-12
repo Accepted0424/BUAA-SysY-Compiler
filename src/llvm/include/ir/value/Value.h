@@ -32,6 +32,7 @@ enum class ValueType {
     AllocaInstTy,
     LoadInstTy,
     UnaryOperatorTy,
+    GetElementPtrInstTy,
 };
 
 class Value {

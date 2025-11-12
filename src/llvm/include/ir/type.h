@@ -82,6 +82,10 @@ public:
         : Type(ArrayTyID), element_type_(element_type), element_num_(-1) {
     }
 
+    TypePtr getElementType() const {
+        return element_type_;
+    }
+
 private:
     std::shared_ptr<Type> element_type_;
     int element_num_;

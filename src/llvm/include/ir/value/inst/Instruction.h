@@ -55,3 +55,16 @@ public:
         const std::vector<std::shared_ptr<Value>> &args):
     Instruction(ValueType::CallInstTy, function->getReturnType()) {};
 };
+
+class GetElementPtrInst : public Instruction {
+public:
+    ~GetElementPtrInst() override = default;
+
+    // TODO
+    static std::shared_ptr<GetElementPtrInst> create(TypePtr elementType) {
+        return std::make_shared<GetElementPtrInst>(elementType);
+    }
+
+    GetElementPtrInst(TypePtr elementType)
+        : Instruction(ValueType::GetElementPtrInstTy, elementType) {}
+};

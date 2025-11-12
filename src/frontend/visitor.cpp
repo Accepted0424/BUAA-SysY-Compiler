@@ -16,9 +16,15 @@ std::shared_ptr<Value> Visitor::visitPrimaryExp(const PrimaryExp &primaryExp) {
 
         case PrimaryExp::LVAL: {
             const std::string &name = primaryExp.lval->ident->content;
+            auto contex = ir_module_.getContext();
             if (!cur_scope_->existInSymTable(name)) {
                 ErrorReporter::error(primaryExp.lineno, ERR_UNDEFINED_NAME);
                 return nullptr;
+            }
+            if (primaryExp.lval->index != nullptr) {
+                auto index = visitExp(*primaryExp.lval->index);
+                auto gep = GetElementPtrInst::create(contex->getIntegerTy());
+                return gep;
             }
             auto symbol = cur_scope_->getSymbol(name);
             return symbol->value;  // symbol里保存的Value，比如AllocaInst或Constant
@@ -58,10 +64,8 @@ std::shared_ptr<Value> Visitor::visitUnaryExp(const UnaryExp &unaryExp) {
                     for (size_t i = 0; i < unaryExp.call->params->params.size(); ++i) {
                         auto expValue = visitExp(*unaryExp.call->params->params[i]);
                         auto paramType = symbol->params[i];
-                        // TODO: const array
                         if (paramType != expValue->getType() || (expValue->getValueType() == ValueType::ConstantArrayTy)) {
                             ErrorReporter::error(unaryExp.lineno, ERR_FUNC_ARG_TYPE_MISMATCH);
-                            break;
                         }
                         args.push_back(expValue);
                     }
@@ -153,8 +157,18 @@ void Visitor::visitConstDecl(const ConstDecl &constDecl) {
             value = ConstantInt::create(context->getIntegerTy(), 0);
 
             symbol = std::make_shared<ConstIntSymbol>(name, value, lineno);
+
+            if (constDef->constInitVal->kind == ConstInitVal::EXP) {
+                visitConstExp(*constDef->constInitVal->exp);
+            } else if (constDef->constInitVal->kind == ConstInitVal::LIST) {
+                LOG_ERROR("Expected single ConstExp for non-array ConstDef");
+            } else {
+                LOG_ERROR("Unreachable in Visitor::visitConstDecl");
+            }
         } else {
             // --- 常量数组 ---
+            auto size = visitConstExp(*constDef->constExp);
+
             auto arrayType = context->getArrayTy(context->getIntegerTy());
 
             auto initialValList = std::vector<std::shared_ptr<ConstantInt>>{};
@@ -170,6 +184,16 @@ void Visitor::visitConstDecl(const ConstDecl &constDecl) {
             value = ConstantArray::create(arrayType, initialValList);
 
             symbol = std::make_shared<ConstIntArraySymbol>(name, value, lineno);
+
+            if (constDef->constInitVal->kind == ConstInitVal::LIST) {
+                for (const auto &constExp : constDef->constInitVal->list) {
+                    visitConstExp(*constExp);
+                }
+            } else if (constDef->constInitVal->kind == ConstInitVal::EXP) {
+                LOG_ERROR("Expected single ConstExp for non-array ConstDef");
+            } else {
+                LOG_ERROR("Unreachable in Visitor::visitConstDecl");
+            }
         }
 
         cur_scope_->addSymbol(symbol);
@@ -188,6 +212,10 @@ void Visitor::visitVarDecl(const VarDecl &varDecl) {
         std::shared_ptr<Symbol> symbol = nullptr;
         const bool isArray = (varDef->constExp != nullptr);
 
+        if (varDef->constExp != nullptr) {
+            auto size = visitConstExp(*varDef->constExp);
+        }
+
         if (isStatic || cur_scope_->isGlobalScope()) {
             // --- static 或 global ---
             if (isArray) {
@@ -198,6 +226,15 @@ void Visitor::visitVarDecl(const VarDecl &varDecl) {
                 } else {
                     symbol = std::make_shared<IntArraySymbol>(name, gv, lineno);
                 }
+                if (varDef->initVal != nullptr) {
+                    if (varDef->initVal->kind == InitVal::LIST) {
+                        for (const auto &exp : varDef->initVal->list) {
+                            auto val = visitExp(*exp);
+                        }
+                    } else {
+                        LOG_ERROR("Unreachable in Visitor::visitVarDecl");
+                    }
+                }
             } else {
                 auto gv = GlobalVariable::create(context->getIntegerTy(), name, false);
                 if (isStatic) {
@@ -205,14 +242,37 @@ void Visitor::visitVarDecl(const VarDecl &varDecl) {
                 } else {
                     symbol = std::make_shared<IntSymbol>(name, gv, lineno);
                 }
+                if (varDef->initVal != nullptr) {
+                    if (varDef->initVal->kind == InitVal::EXP) {
+                        auto val = visitExp(*varDef->initVal->exp);
+                    } else {
+                        LOG_ERROR("Unreachable in Visitor::visitVarDecl");
+                    }
+                }
             }
         } else {
             // --- 普通局部变量 ---
             if (isArray) {
+                if (varDef->initVal != nullptr) {
+                    if (varDef->initVal->kind == InitVal::LIST) {
+                        for (const auto &exp : varDef->initVal->list) {
+                            auto val = visitExp(*exp);
+                        }
+                    } else {
+                        LOG_ERROR("Unreachable in Visitor::visitVarDecl");
+                    }
+                }
                 auto type = context->getArrayTy(context->getIntegerTy());
                 auto alloca = AllocaInst::create(type);
                 symbol = std::make_shared<IntArraySymbol>(name, alloca, lineno);
             } else {
+                if (varDef->initVal != nullptr) {
+                    if (varDef->initVal->kind == InitVal::EXP) {
+                        auto val = visitExp(*varDef->initVal->exp);
+                    } else {
+                        LOG_ERROR("Unreachable in Visitor::visitVarDecl");
+                    }
+                }
                 auto alloca = AllocaInst::create(context->getIntegerTy());
                 symbol = std::make_shared<IntSymbol>(name, alloca, lineno);
             }
@@ -318,6 +378,12 @@ std::shared_ptr<Value> Visitor::visitCond(const Cond &cond) {
 
 void Visitor::visitForStmt(const ForStmt &forStmt) {
     for (const auto &[lVal, exp] : forStmt.assigns) {
+        if (lVal->index != nullptr) {
+            visitExp(*lVal->index);
+        }
+        if (exp != nullptr) {
+            visitExp(*exp);
+        }
         if (!cur_scope_->existInSymTable(lVal->ident->content)) {
             ErrorReporter::error(lVal->lineno, ERR_UNDEFINED_NAME);
             break;
@@ -334,6 +400,10 @@ bool Visitor::visitStmt(const Stmt &stmt, bool isLast) {
 
     switch (stmt.kind) {
         case Stmt::ASSIGN:
+            if (stmt.assignStmt.lVal->index != nullptr) {
+                visitExp(*stmt.assignStmt.lVal->index);
+            }
+            visitExp(*stmt.assignStmt.exp);
             if (!cur_scope_->existInSymTable(stmt.assignStmt.lVal->ident->content)) {
                 ErrorReporter::error(stmt.lineno, ERR_UNDEFINED_NAME);
                 break;
@@ -342,7 +412,6 @@ bool Visitor::visitStmt(const Stmt &stmt, bool isLast) {
                 cur_scope_->getSymbol(stmt.assignStmt.lVal->ident->content)->type == CONST_INT_ARRAY) {
                 ErrorReporter::error(stmt.lineno, ERR_CONST_ASSIGNMENT);
             }
-            visitExp(*stmt.assignStmt.exp);
             break;
         case Stmt::EXP:
             if (stmt.exp != nullptr) {
@@ -390,9 +459,9 @@ bool Visitor::visitStmt(const Stmt &stmt, bool isLast) {
             }
             break;
         case Stmt::RETURN:
+            hasReturn = true;
             if (stmt.returnExp != nullptr) {
                 auto returnExpValue = visitExp(*stmt.returnExp);
-                hasReturn = true;
                 if (cur_func_->getReturnType()->is(Type::VoidTyID) && !returnExpValue->getType()->is(Type::VoidTyID)) {
                     ErrorReporter::error(stmt.lineno, ERR_VOID_FUNC_RETURN_MISMATCH);
                 }
@@ -417,6 +486,10 @@ bool Visitor::visitStmt(const Stmt &stmt, bool isLast) {
 
             if (num != static_cast<int>(stmt.printfStmt.args.size())) {
                 ErrorReporter::error(stmt.lineno, ERR_PRINTF_ARG_MISMATCH);
+            }
+
+            for (const auto &arg : stmt.printfStmt.args) {
+                visitExp(*arg);
             }
             break;
     }
