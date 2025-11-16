@@ -6,6 +6,7 @@
 #include "logger.h"
 #include "parser.h"
 #include "visitor.h"
+#include "llvm/include/asm/AsmPrinter.h"
 #include "llvm/include/ir/llvmContext.h"
 #include "llvm/include/ir/module.h"
 
@@ -45,16 +46,33 @@ void semanticAnalyse(std::ifstream& file, std::ofstream& out) {
     visitor.visit(*root);
 }
 
+// homework 5
+void generateCode(std::ifstream& file, std::ofstream& out) {
+    Lexer lexer(file);
+    Parser parser(lexer);
+    auto root = parser.parse();
+
+    LlvmContext context;
+    auto module = Module("main", context);
+
+    auto visitor = Visitor(module);
+    visitor.visit(*root);
+
+    const AsmPrinter printer(module, out);
+    printer.print();
+}
+
 int main(int argc, char *argv[]) {
     std::ifstream infile("testfile.txt", std::ios::in);
-    std::ofstream outfile("symbol.txt", std::ios::out);
+    std::ofstream outfile("llvm_ir.txt", std::ios::out);
     std::ofstream errorfile("error.txt", std::ios::out);
 
     Logger::instance().setLevel(LogLevel::RELEASE);
 
     // lex(infile, outfile);
     // parse(infile, outfile);
-    semanticAnalyse(infile, outfile);
+    // semanticAnalyse(infile, outfile);
+    generateCode(infile, outfile);
 
     ErrorReporter::get().dump(errorfile);
 

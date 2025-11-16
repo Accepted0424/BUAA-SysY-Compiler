@@ -12,5 +12,5 @@ add_subdirectory(src)
 # 添加可执行文件
 add_executable(Compiler src/main.cpp)
 
-# 链接 frontend 库
-target_link_libraries(Compiler PRIVATE frontend)
+# 链接组件库
+target_link_libraries(Compiler PRIVATE frontend llvm)

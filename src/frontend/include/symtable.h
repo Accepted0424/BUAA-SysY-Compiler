@@ -200,8 +200,10 @@ public:
             for (const auto& sym : scope->ordered_) {
                 if (sym->name == "getint") continue;
                 std::string typeStr = symbolTypeToString(sym->type);
-                out_->get() << scope->id_ << " " << sym->name << " " << typeStr << std::endl;
-                std::cout << scope->id_ << " " << sym->name << " " << typeStr << std::endl;
+                if (out_) {
+                    out_->get() << scope->id_ << " " << sym->name << " " << typeStr << std::endl;
+                    std::cout << scope->id_ << " " << sym->name << " " << typeStr << std::endl;
+                }
             }
         }
     }
