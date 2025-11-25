@@ -9,7 +9,7 @@
 #include "llvm/include/ir/value/inst/BinaryInstruction.h"
 #include "llvm/include/ir/value/inst/UnaryInstruction.h"
 
-std::shared_ptr<Value> Visitor::visitPrimaryExp(const PrimaryExp &primaryExp) {
+ValuePtr Visitor::visitPrimaryExp(const PrimaryExp &primaryExp) {
     switch (primaryExp.kind) {
         case PrimaryExp::EXP:
             return visitExp(*primaryExp.exp);
@@ -42,7 +42,7 @@ std::shared_ptr<Value> Visitor::visitPrimaryExp(const PrimaryExp &primaryExp) {
     }
 }
 
-std::shared_ptr<Value> Visitor::visitUnaryExp(const UnaryExp &unaryExp) {
+ValuePtr Visitor::visitUnaryExp(const UnaryExp &unaryExp) {
     switch (unaryExp.kind) {
         case UnaryExp::PRIMARY:
             return visitPrimaryExp(*unaryExp.primary);
@@ -93,7 +93,7 @@ std::shared_ptr<Value> Visitor::visitUnaryExp(const UnaryExp &unaryExp) {
     return nullptr;
 }
 
-std::shared_ptr<Value> Visitor::visitMulExp(const MulExp &mulExp) {
+ValuePtr Visitor::visitMulExp(const MulExp &mulExp) {
     auto lhs = visitUnaryExp(*mulExp.first);
     for (const auto &[op, rhs] : mulExp.rest) {
         auto rhsVal = visitUnaryExp(*rhs);
@@ -112,7 +112,7 @@ std::shared_ptr<Value> Visitor::visitMulExp(const MulExp &mulExp) {
     return lhs;
 }
 
-std::shared_ptr<Value> Visitor::visitAddExp(const AddExp &addExp) {
+ValuePtr Visitor::visitAddExp(const AddExp &addExp) {
     auto lhs = visitMulExp(*addExp.first);
     for (const auto &[op, rhs] : addExp.rest) {
         auto rhsVal = visitMulExp(*rhs);
@@ -128,7 +128,7 @@ std::shared_ptr<Value> Visitor::visitAddExp(const AddExp &addExp) {
     return lhs;
 }
 
-std::shared_ptr<ConstantInt> Visitor::visitConstExp(const ConstExp &constExp) {
+ConstantIntPtr Visitor::visitConstExp(const ConstExp &constExp) {
     auto value = visitAddExp(*constExp.addExp);
 
     if (value->getValueType() != ValueType::ConstantIntTy) {
@@ -139,7 +139,7 @@ std::shared_ptr<ConstantInt> Visitor::visitConstExp(const ConstExp &constExp) {
     return std::dynamic_pointer_cast<ConstantInt>(value);
 }
 
-std::shared_ptr<Value> Visitor::visitExp(const Exp &exp) {
+ValuePtr Visitor::visitExp(const Exp &exp) {
     return visitAddExp(*exp.addExp);
 }
 
@@ -149,17 +149,27 @@ void Visitor::visitConstDecl(const ConstDecl &constDecl) {
     for (const auto &constDef: constDecl.constDefs) {
         const std::string &name = constDef->ident->content;
         const int lineno = constDef->lineno;
-        std::shared_ptr<Symbol> symbol;
-        std::shared_ptr<Constant> value;
 
         if (constDef->constExp == nullptr) {
             // --- 普通常量 ---
-            value = ConstantInt::create(context->getIntegerTy(), 0);
-
-            symbol = std::make_shared<ConstIntSymbol>(name, value, lineno);
-
             if (constDef->constInitVal->kind == ConstInitVal::EXP) {
-                visitConstExp(*constDef->constInitVal->exp);
+                auto symbol = std::make_shared<ConstIntSymbol>(name, nullptr, lineno);
+                auto val = visitConstExp(*constDef->constInitVal->exp);
+
+                if (cur_func_ != nullptr) {
+                    // 如果是在函数内定义的常量，需要把常量值存储到栈上
+                    auto alloca = AllocaInst::create(context->getIntegerTy());
+                    auto store = StoreInst::create(context->getIntegerTy(), val, alloca);
+                    symbol->value = alloca;
+                    (*cur_func_->basicBlockBegin())->insertInstruction(alloca);
+                    (*cur_func_->basicBlockBegin())->insertInstruction(store);
+                } else {
+                    // 全局常量，直接用 ConstantInt 即可
+                    auto globalVar = GlobalVariable::create(context->getIntegerTy(), name, val, true);
+                    symbol->value = globalVar;
+                }
+
+                cur_scope_->addSymbol(symbol);
             } else if (constDef->constInitVal->kind == ConstInitVal::LIST) {
                 LOG_ERROR("Expected single ConstExp for non-array ConstDef");
             } else {
@@ -167,36 +177,45 @@ void Visitor::visitConstDecl(const ConstDecl &constDecl) {
             }
         } else {
             // --- 常量数组 ---
-            auto size = visitConstExp(*constDef->constExp);
-
-            auto arrayType = context->getArrayTy(context->getIntegerTy());
-
-            auto initialValList = std::vector<std::shared_ptr<ConstantInt>>{};
             if (constDef->constInitVal->kind == ConstInitVal::LIST) {
+                auto symbol = std::make_shared<ConstIntArraySymbol>(name, nullptr, lineno);
+
+                auto size = visitConstExp(*constDef->constExp);
+
+                auto arrayType = context->getArrayTy(context->getIntegerTy());
+
+                auto initialValList = std::vector<ConstantIntPtr>{};
+
                 for (const auto &constExp : constDef->constInitVal->list) {
                     auto val = visitConstExp(*constExp);
                     initialValList.push_back(val);
                 }
-            } else {
-                LOG_ERROR("Unreachable in Visitor::visitConstDecl");
-            }
 
-            value = ConstantArray::create(arrayType, initialValList);
+                if (cur_func_ != nullptr) {
+                    // 如果是在函数内定义的常量数组，需要把常量值存储到栈上
+                    auto alloca = AllocaInst::create(arrayType);
+                    (*cur_func_->basicBlockBegin())->insertInstruction(alloca);
 
-            symbol = std::make_shared<ConstIntArraySymbol>(name, value, lineno);
+                    for (int i = 0; i < initialValList.size(); i++) {
+                        auto getElementPtr = GetElementPtrInst::create(context->getIntegerTy(), alloca, {0, i});
+                        (*cur_func_->basicBlockBegin())->insertInstruction(getElementPtr);
+                    }
 
-            if (constDef->constInitVal->kind == ConstInitVal::LIST) {
-                for (const auto &constExp : constDef->constInitVal->list) {
-                    visitConstExp(*constExp);
+                    symbol->value = alloca;
+                } else {
+                    // 全局常量数组，直接用 ConstantArray 即可
+                    auto constArray = ConstantArray::create(arrayType, initialValList);
+                    auto globalVar = GlobalVariable::create(arrayType, name, constArray, true);
+                    symbol->value = globalVar;
                 }
+
+                cur_scope_->addSymbol(symbol);
             } else if (constDef->constInitVal->kind == ConstInitVal::EXP) {
                 LOG_ERROR("Expected single ConstExp for non-array ConstDef");
             } else {
                 LOG_ERROR("Unreachable in Visitor::visitConstDecl");
             }
         }
-
-        cur_scope_->addSymbol(symbol);
     }
 }
 
@@ -292,7 +311,7 @@ void Visitor::visitDecl(const Decl &decl) {
     }
 }
 
-std::shared_ptr<Value> Visitor::visitRelExp(const RelExp &relExp) {
+ValuePtr Visitor::visitRelExp(const RelExp &relExp) {
     auto lhs = visitAddExp(*relExp.addExpFirst);
     if (lhs == nullptr) {
         return nullptr;
@@ -320,7 +339,7 @@ std::shared_ptr<Value> Visitor::visitRelExp(const RelExp &relExp) {
     return lhs;
 }
 
-std::shared_ptr<Value> Visitor::visitEqExp(const EqExp &eqExp) {
+ValuePtr Visitor::visitEqExp(const EqExp &eqExp) {
     auto lhs = visitRelExp(*eqExp.relExpFirst);
     if (lhs == nullptr) {
         return nullptr;
@@ -342,7 +361,7 @@ std::shared_ptr<Value> Visitor::visitEqExp(const EqExp &eqExp) {
     return lhs;
 }
 
-std::shared_ptr<Value> Visitor::visitLAndExp(const LAndExp &lAndExp) {
+ValuePtr Visitor::visitLAndExp(const LAndExp &lAndExp) {
     auto lhs = visitEqExp(*lAndExp.eqExps[0]);
     if (lhs == nullptr) {
         return nullptr;
@@ -357,7 +376,7 @@ std::shared_ptr<Value> Visitor::visitLAndExp(const LAndExp &lAndExp) {
     return lhs;
 }
 
-std::shared_ptr<Value> Visitor::visitLOrExp(const LOrExp &lOrExp) {
+ValuePtr Visitor::visitLOrExp(const LOrExp &lOrExp) {
     auto lhs = visitLAndExp(*lOrExp.lAndExps[0]);
     if (lhs == nullptr) {
         return nullptr;
@@ -372,7 +391,7 @@ std::shared_ptr<Value> Visitor::visitLOrExp(const LOrExp &lOrExp) {
     return lhs;
 }
 
-std::shared_ptr<Value> Visitor::visitCond(const Cond &cond) {
+ValuePtr Visitor::visitCond(const Cond &cond) {
     return visitLOrExp(*cond.lOrExp);
 }
 
@@ -531,7 +550,7 @@ void Visitor::visitBlock(const Block &block, bool isFuncBlock) {
     }
 }
 
-void Visitor::visitFuncDef(const FuncDef &funcDef) {
+FunctionPtr Visitor::visitFuncDef(const FuncDef &funcDef) {
     auto context = ir_module_.getContext();
 
     std::vector<ArgumentPtr> paramArgs;
@@ -594,7 +613,7 @@ void Visitor::visitFuncDef(const FuncDef &funcDef) {
     cur_scope_ = cur_scope_->popScope();
 }
 
-void Visitor::visitMainFuncDef(const MainFuncDef &mainFunc) {
+FunctionPtr Visitor::visitMainFuncDef(const MainFuncDef &mainFunc) {
     cur_func_ = Function::create(
         ir_module_.getContext()->getIntegerTy(),
         "main",
@@ -603,6 +622,7 @@ void Visitor::visitMainFuncDef(const MainFuncDef &mainFunc) {
     cur_scope_ = cur_scope_->pushScope();
     visitBlock(*mainFunc.block, true);
     cur_scope_ = cur_scope_->popScope();
+    return cur_func_;
 }
 
 void Visitor::visit(const CompUnit &compUnit) {
@@ -624,7 +644,8 @@ void Visitor::visit(const CompUnit &compUnit) {
         visitFuncDef(*func_def);
     }
 
-    visitMainFuncDef(*compUnit.main_func);
+    const auto mainFuncPtr = visitMainFuncDef(*compUnit.main_func);
+    ir_module_.setMainFunction(mainFuncPtr);
 
     cur_scope_->printAllScopes();
 }

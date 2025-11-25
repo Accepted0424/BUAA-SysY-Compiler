@@ -12,7 +12,13 @@ public:
 
     const AsmWriter& push(char ch) const;
 
-    const AsmWriter& push(std::string str, ...) const;
+    const AsmWriter& push(const std::string& str, ...) const;
+
+    const AsmWriter &pushSpace() const;
+
+    const AsmWriter &pushLine(const std::string &str, ...) const;
+
+    const AsmWriter &pushComment(const std::string &str, ...) const;
 
     AsmWriter(Module &module, std::ostream &out) : module_(module), out_(out) {}
 

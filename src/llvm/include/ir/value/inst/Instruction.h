@@ -56,12 +56,19 @@ public:
     Instruction(ValueType::CallInstTy, function->getReturnType()) {};
 };
 
+class MemcpyInst : public Instruction {
+public:
+    ~MemcpyInst() override = default;
+
+    static std::shared_ptr<MemcpyInst> create(std::shared_ptr<Function> function,)
+}
+
 class GetElementPtrInst : public Instruction {
 public:
     ~GetElementPtrInst() override = default;
 
     // TODO
-    static std::shared_ptr<GetElementPtrInst> create(TypePtr elementType) {
+    static std::shared_ptr<GetElementPtrInst> create(TypePtr elementType, ValuePtr address, std::vector<int> indices) {
         return std::make_shared<GetElementPtrInst>(elementType);
     }
 

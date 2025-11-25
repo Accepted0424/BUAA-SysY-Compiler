@@ -9,6 +9,10 @@ public:
 
     void print() const;
 
+    void printHeader() const;
+
+    void printModule() const;
+
 private:
     Module &module_;
 

@@ -23,6 +23,14 @@ public:
 
     TypePtr getReturnType() const { return returnType_; }
 
+    std::list<BasicBlockPtr>::iterator basicBlockBegin() {
+        return basicBlocks_.begin();
+    }
+
+    std::list<BasicBlockPtr>::iterator basicBlockEnd() {
+        return basicBlocks_.end();
+    }
+
 private:
     TypePtr returnType_;
 

@@ -32,25 +32,25 @@ private:
 
     FunctionPtr cur_func_ = nullptr;
 
-    // BasicBlockPtr cur_block_ = nullptr;
+    BasicBlockPtr cur_block_ = nullptr;
 
     bool inForLoop_ = false;
 
-    void visitFuncDef(const FuncDef &node);
+    FunctionPtr visitFuncDef(const FuncDef &node);
 
-    void visitMainFuncDef(const MainFuncDef &mainFunc);
+    FunctionPtr visitMainFuncDef(const MainFuncDef &mainFunc);
 
-    std::shared_ptr<Value> visitPrimaryExp(const PrimaryExp &primaryExp);
+    ValuePtr visitPrimaryExp(const PrimaryExp &primaryExp);
 
-    std::shared_ptr<Value> visitUnaryExp(const UnaryExp &unaryExp);
+    ValuePtr visitUnaryExp(const UnaryExp &unaryExp);
 
-    std::shared_ptr<Value> visitMulExp(const MulExp &mulExp);
+    ValuePtr visitMulExp(const MulExp &mulExp);
 
-    std::shared_ptr<Value> visitAddExp(const AddExp &addExp);
+    ValuePtr visitAddExp(const AddExp &addExp);
 
-    std::shared_ptr<ConstantInt> visitConstExp(const ConstExp &constExp);
+    ConstantIntPtr visitConstExp(const ConstExp &constExp);
 
-    std::shared_ptr<Value> visitExp(const Exp &exp);
+    ValuePtr visitExp(const Exp &exp);
 
     void visitConstDecl(const ConstDecl &constDecl);
 
@@ -58,15 +58,15 @@ private:
 
     void visitDecl(const Decl &decl);
 
-    std::shared_ptr<Value> visitRelExp(const RelExp &relExp);
+    ValuePtr visitRelExp(const RelExp &relExp);
 
-    std::shared_ptr<Value> visitEqExp(const EqExp &eqExp);
+    ValuePtr visitEqExp(const EqExp &eqExp);
 
-    std::shared_ptr<Value> visitLAndExp(const LAndExp &lAndExp);
+    ValuePtr visitLAndExp(const LAndExp &lAndExp);
 
-    std::shared_ptr<Value> visitLOrExp(const LOrExp &lOrExp);
+    ValuePtr visitLOrExp(const LOrExp &lOrExp);
 
-    std::shared_ptr<Value> visitCond(const Cond &cond);
+    ValuePtr visitCond(const Cond &cond);
 
     void visitForStmt(const ForStmt &forStmt);
 
