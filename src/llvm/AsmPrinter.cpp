@@ -25,7 +25,8 @@ std::string typeToString(const TypePtr &type) {
         return "void";
     }
     if (type->is(Type::IntegerTyID)) {
-        return "i32";
+        auto intType = std::static_pointer_cast<IntegerType>(type);
+        return "i" + std::to_string(intType->getBitWidth());
     }
     if (type->is(Type::ArrayTyID)) {
         auto arr = std::static_pointer_cast<ArrayType>(type);
@@ -229,8 +230,9 @@ private:
             }
             case ValueType::CompareInstTy: {
                 auto cmp = std::static_pointer_cast<CompareOperator>(inst);
+                auto operandType = cmp->getLhs() ? cmp->getLhs()->getType() : nullptr;
                 out_ << "  " << valueName(inst) << " = icmp " << cmpOpToString(cmp->OpType())
-                     << " " << typeToString(cmp->getType()) << " "
+                     << " " << typeToString(operandType) << " "
                      << valueName(cmp->getLhs()) << ", " << valueName(cmp->getRhs()) << "\n";
                 break;
             }
@@ -240,6 +242,13 @@ private:
                 out_ << "  " << valueName(inst) << " = " << opStr << " "
                      << typeToString(logi->getType()) << " "
                      << valueName(logi->getLhs()) << ", " << valueName(logi->getRhs()) << "\n";
+                break;
+            }
+            case ValueType::ZExtInstTy: {
+                auto zext = std::static_pointer_cast<ZExtInst>(inst);
+                out_ << "  " << valueName(inst) << " = zext "
+                     << typeToString(zext->getOperand()->getType()) << " " << valueName(zext->getOperand())
+                     << " to " << typeToString(zext->getType()) << "\n";
                 break;
             }
             case ValueType::UnaryOperatorTy: {

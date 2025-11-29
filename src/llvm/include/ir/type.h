@@ -61,6 +61,10 @@ public:
         : Type(IntegerTyID), _bitWidth(bitWidth) {
     }
 
+    unsigned getBitWidth() const {
+        return _bitWidth;
+    }
+
 private:
     unsigned _bitWidth;
 };

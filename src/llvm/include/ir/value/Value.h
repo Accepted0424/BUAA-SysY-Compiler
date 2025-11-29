@@ -23,6 +23,7 @@ enum class ValueType {
     BinaryOperatorTy,
     CompareInstTy,
     LogicalInstTy,
+    ZExtInstTy,
     BranchInstTy,
     JumpInstTy,
     ReturnInstTy,

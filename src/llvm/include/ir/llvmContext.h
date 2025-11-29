@@ -18,6 +18,7 @@ class LlvmContext {
 public:
     LlvmContext() {
         int_ty_ = std::make_shared<IntegerType>(32);
+        bool_ty_ = std::make_shared<IntegerType>(1);
         void_ty_ = std::make_shared<VoidType>();
     }
 
@@ -29,6 +30,10 @@ public:
 
     TypePtr getIntegerTy() {
         return int_ty_;
+    }
+
+    TypePtr getBoolTy() {
+        return bool_ty_;
     }
 
     TypePtr getArrayTy(TypePtr elementTy, int elementNum = -1) {
@@ -55,6 +60,7 @@ private:
 
     // LlvmContext own all types.
     std::shared_ptr<IntegerType> int_ty_;
+    std::shared_ptr<IntegerType> bool_ty_;
     std::shared_ptr<VoidType> void_ty_;
 
     std::unordered_map<std::pair<Type*, int>, TypePtr, ArrayTypeKeyHash> arrayTypes_;

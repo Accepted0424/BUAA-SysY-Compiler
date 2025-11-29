@@ -185,3 +185,24 @@ private:
     BasicBlockPtr true_;
     BasicBlockPtr false_;
 };
+
+class ZExtInst : public Instruction {
+public:
+    ~ZExtInst() override = default;
+
+    static std::shared_ptr<ZExtInst> create(TypePtr targetType, ValuePtr operand, const std::string &name = "") {
+        auto inst = std::make_shared<ZExtInst>(targetType, operand);
+        inst->setName(name);
+        return inst;
+    }
+
+    ZExtInst(TypePtr targetType, ValuePtr operand)
+        : Instruction(ValueType::ZExtInstTy, std::move(targetType)), operand_(std::move(operand)) {
+        addOperand(operand_);
+    }
+
+    ValuePtr getOperand() const { return operand_; }
+
+private:
+    ValuePtr operand_;
+};

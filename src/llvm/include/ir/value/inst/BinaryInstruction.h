@@ -51,7 +51,7 @@ public:
           op_type_(opType) {}
 
     static CompareOperatorPtr create(CompareOpType opType, ValuePtr lhs, ValuePtr rhs) {
-        auto type = lhs->getType();
+        auto type = std::make_shared<IntegerType>(1);
         return std::make_shared<CompareOperator>(type, lhs, rhs, opType);
     }
 

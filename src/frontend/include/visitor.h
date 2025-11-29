@@ -7,6 +7,7 @@
 #include "llvm/include/ir/module.h"
 #include "llvm/include/ir/value/Function.h"
 #include "llvm/include/ir/value/Value.h"
+#include "llvm/include/ir/value/inst/BinaryInstruction.h"
 
 using namespace AstNode;
 
@@ -47,6 +48,10 @@ private:
     ValuePtr loadIfPointer(const ValuePtr &value);
 
     ValuePtr toBool(const ValuePtr &value);
+
+    ValuePtr zextToInt32(const ValuePtr &value);
+
+    ValuePtr createCmp(CompareOpType op, ValuePtr lhs, ValuePtr rhs);
 
     void insertInst(const InstructionPtr &inst, bool toEntry = false);
 

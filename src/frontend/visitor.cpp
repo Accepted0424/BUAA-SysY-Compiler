@@ -71,9 +71,38 @@ ValuePtr Visitor::loadIfPointer(const ValuePtr &value) {
 }
 
 ValuePtr Visitor::toBool(const ValuePtr &value) {
+    // Values coming from compares or logical ops are already boolean-like; reuse them.
+    if (value && (value->getValueType() == ValueType::CompareInstTy ||
+                  value->getValueType() == ValueType::LogicalInstTy)) {
+        return value;
+    }
     auto ctx = ir_module_.getContext();
     auto rhs = makeConst(ctx, 0);
-    auto cmp = CompareOperator::create(CompareOpType::NEQ, loadIfPointer(value), rhs);
+    return createCmp(CompareOpType::NEQ, value, rhs);
+}
+
+ValuePtr Visitor::zextToInt32(const ValuePtr &value) {
+    if (!value || !value->getType()) {
+        return value;
+    }
+    if (!value->getType()->is(Type::IntegerTyID)) {
+        return value;
+    }
+    auto intType = std::static_pointer_cast<IntegerType>(value->getType());
+    if (intType->getBitWidth() == 32) {
+        return value;
+    }
+    auto zext = ZExtInst::create(ir_module_.getContext()->getIntegerTy(), value);
+    insertInst(zext);
+    return zext;
+}
+
+ValuePtr Visitor::createCmp(CompareOpType op, ValuePtr lhs, ValuePtr rhs) {
+    lhs = loadIfPointer(lhs);
+    rhs = loadIfPointer(rhs);
+    lhs = zextToInt32(lhs);
+    rhs = zextToInt32(rhs);
+    auto cmp = CompareOperator::create(op, lhs, rhs);
     insertInst(cmp);
     return cmp;
 }
@@ -503,19 +532,18 @@ ValuePtr Visitor::visitRelExp(const RelExp &relExp) {
         ValuePtr cmp = nullptr;
         switch (op) {
             case RelExp::LSS:
-                cmp = CompareOperator::create(CompareOpType::LSS, lhs, rhsVal);
+                cmp = createCmp(CompareOpType::LSS, lhs, rhsVal);
                 break;
             case RelExp::GRE:
-                cmp = CompareOperator::create(CompareOpType::GRE, lhs, rhsVal);
+                cmp = createCmp(CompareOpType::GRE, lhs, rhsVal);
                 break;
             case RelExp::LEQ:
-                cmp = CompareOperator::create(CompareOpType::LEQ, lhs, rhsVal);
+                cmp = createCmp(CompareOpType::LEQ, lhs, rhsVal);
                 break;
             case RelExp::GEQ:
-                cmp = CompareOperator::create(CompareOpType::GEQ, lhs, rhsVal);
+                cmp = createCmp(CompareOpType::GEQ, lhs, rhsVal);
                 break;
         }
-        insertInst(std::dynamic_pointer_cast<Instruction>(cmp));
         lhs = cmp;
     }
     return lhs;
@@ -534,13 +562,12 @@ ValuePtr Visitor::visitEqExp(const EqExp &eqExp) {
         ValuePtr cmp = nullptr;
         switch (op) {
             case EqExp::EQL:
-                cmp = CompareOperator::create(CompareOpType::EQL, lhs, rhsVal);
+                cmp = createCmp(CompareOpType::EQL, lhs, rhsVal);
                 break;
             case EqExp::NEQ:
-                cmp = CompareOperator::create(CompareOpType::NEQ, lhs, rhsVal);
+                cmp = createCmp(CompareOpType::NEQ, lhs, rhsVal);
                 break;
         }
-        insertInst(std::dynamic_pointer_cast<Instruction>(cmp));
         lhs = cmp;
     }
     return lhs;
