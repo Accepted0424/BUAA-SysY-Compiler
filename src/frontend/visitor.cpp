@@ -85,16 +85,19 @@ ValuePtr Visitor::zextToInt32(const ValuePtr &value) {
     if (!value || !value->getType()) {
         return value;
     }
-    if (!value->getType()->is(Type::IntegerTyID)) {
-        return value;
+    auto ctxInt32 = ir_module_.getContext()->getIntegerTy();
+    const bool forceZext = value->getValueType() == ValueType::CompareInstTy ||
+                           value->getValueType() == ValueType::LogicalInstTy;
+    if (value->getType()->is(Type::IntegerTyID)) {
+        auto intType = std::static_pointer_cast<IntegerType>(value->getType());
+        if (!forceZext && intType->getBitWidth() == 32) {
+            return value;
+        }
+        auto zext = ZExtInst::create(ctxInt32, value);
+        insertInst(zext);
+        return zext;
     }
-    auto intType = std::static_pointer_cast<IntegerType>(value->getType());
-    if (intType->getBitWidth() == 32) {
-        return value;
-    }
-    auto zext = ZExtInst::create(ir_module_.getContext()->getIntegerTy(), value);
-    insertInst(zext);
-    return zext;
+    return value;
 }
 
 ValuePtr Visitor::createCmp(CompareOpType op, ValuePtr lhs, ValuePtr rhs) {
@@ -234,13 +237,15 @@ ValuePtr Visitor::visitUnaryExp(const UnaryExp &unaryExp) {
                     res = UnaryOperator::create(UnaryOpType::NEG, rhs);
                     break;
                 case UnaryOp::NOT:
-                    res = UnaryOperator::create(UnaryOpType::NOT, rhs);
+                    res = createCmp(CompareOpType::EQL, rhs, makeConst(ir_module_.getContext(), 0));
                     break;
                 default:
                     LOG_ERROR("Unreachable in Visitor::visitUnaryExp");
                     return nullptr;
             }
-            insertInst(std::dynamic_pointer_cast<Instruction>(res));
+            if (res && res->getValueType() != ValueType::CompareInstTy) {
+                insertInst(std::dynamic_pointer_cast<Instruction>(res));
+            }
             return res;
         }
     }
