@@ -29,13 +29,13 @@ public:
                                     InstructionPtr inst);
 
     // Remove an instruction from the basic block.
-    BasicBlockPtr RemoveInstruction(InstructionPtr instruction);
+    BasicBlockPtr removeInstruction(InstructionPtr instruction);
 
-    instruction_iterator InstructionBegin() {
+    instruction_iterator instructionBegin() {
         return instructions_.begin();
     }
 
-    instruction_iterator InstructionEnd() {
+    instruction_iterator instructionEnd() {
         return instructions_.end();
     }
 

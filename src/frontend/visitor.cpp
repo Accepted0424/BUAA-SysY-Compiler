@@ -21,7 +21,15 @@ ConstantIntPtr makeConst(LlvmContext* ctx, int value) {
 
 void Visitor::insertInst(const InstructionPtr &inst, bool toEntry) {
     if (toEntry && entry_block_ != nullptr) {
-        entry_block_->insertInstruction(inst);
+        // Keep allocas (and other entry-only setup) before the first non-alloca,
+        // so terminators added later stay at the end of the block.
+        auto it = entry_block_->instructionBegin();
+        for (; it != entry_block_->instructionEnd(); ++it) {
+            if ((*it)->getValueType() != ValueType::AllocaInstTy) {
+                break;
+            }
+        }
+        entry_block_->insertInstruction(it, inst);
         return;
     }
     if (cur_block_ != nullptr) {
@@ -31,7 +39,13 @@ void Visitor::insertInst(const InstructionPtr &inst, bool toEntry) {
 
 BasicBlockPtr Visitor::newBlock(const std::string &hint) {
     auto bb = BasicBlock::create(cur_func_);
-    bb->setName(hint);
+    std::string name = hint;
+    if (!name.empty()) {
+        name += "." + std::to_string(blockId_++);
+    } else {
+        name = "bb." + std::to_string(blockId_++);
+    }
+    bb->setName(name);
     return bb;
 }
 
@@ -540,6 +554,11 @@ ValuePtr Visitor::visitLAndExp(const LAndExp &lAndExp) {
     auto falseBlock = newBlock("land.false");
     auto trueBlock = newBlock("land.true");
     auto endBlock = newBlock("land.end");
+    auto entryBlock = newBlock("land.entry");
+
+    if (cur_block_ != nullptr) {
+        insertInst(JumpInst::create(entryBlock));
+    }
 
     // store false once
     cur_block_ = falseBlock;
@@ -551,15 +570,10 @@ ValuePtr Visitor::visitLAndExp(const LAndExp &lAndExp) {
     insertInst(JumpInst::create(endBlock));
 
     // start chain
-    cur_block_ = newBlock("land.entry");
-    auto condVal = toBool(visitEqExp(*lAndExp.eqExps[0]));
-    auto nextBlock = newBlock("land.next");
-    insertInst(BranchInst::create(condVal, nextBlock, falseBlock));
-
-    cur_block_ = nextBlock;
-    for (size_t i = 1; i < lAndExp.eqExps.size(); ++i) {
-        condVal = toBool(visitEqExp(*lAndExp.eqExps[i]));
-        const bool isLast = (i == lAndExp.eqExps.size() - 1);
+    cur_block_ = entryBlock;
+    for (size_t i = 0; i < lAndExp.eqExps.size(); ++i) {
+        auto condVal = toBool(visitEqExp(*lAndExp.eqExps[i]));
+        const bool isLast = (i + 1 == lAndExp.eqExps.size());
         auto next = isLast ? trueBlock : newBlock("land.next");
         insertInst(BranchInst::create(condVal, next, falseBlock));
         cur_block_ = next;
@@ -579,6 +593,11 @@ ValuePtr Visitor::visitLOrExp(const LOrExp &lOrExp) {
     auto trueBlock = newBlock("lor.true");
     auto falseBlock = newBlock("lor.false");
     auto endBlock = newBlock("lor.end");
+    auto entryBlock = newBlock("lor.entry");
+
+    if (cur_block_ != nullptr) {
+        insertInst(JumpInst::create(entryBlock));
+    }
 
     // store true once
     cur_block_ = trueBlock;
@@ -590,15 +609,10 @@ ValuePtr Visitor::visitLOrExp(const LOrExp &lOrExp) {
     insertInst(JumpInst::create(endBlock));
 
     // start chain
-    cur_block_ = newBlock("lor.entry");
-    auto condVal = toBool(visitLAndExp(*lOrExp.lAndExps[0]));
-    auto nextBlock = newBlock("lor.next");
-    insertInst(BranchInst::create(condVal, trueBlock, nextBlock));
-
-    cur_block_ = nextBlock;
-    for (size_t i = 1; i < lOrExp.lAndExps.size(); ++i) {
-        condVal = toBool(visitLAndExp(*lOrExp.lAndExps[i]));
-        const bool isLast = (i == lOrExp.lAndExps.size() - 1);
+    cur_block_ = entryBlock;
+    for (size_t i = 0; i < lOrExp.lAndExps.size(); ++i) {
+        auto condVal = toBool(visitLAndExp(*lOrExp.lAndExps[i]));
+        const bool isLast = (i + 1 == lOrExp.lAndExps.size());
         auto next = isLast ? falseBlock : newBlock("lor.next");
         insertInst(BranchInst::create(condVal, trueBlock, next));
         cur_block_ = next;
@@ -876,6 +890,7 @@ FunctionPtr Visitor::visitFuncDef(const FuncDef &funcDef) {
     cur_scope_->addSymbol(symbol);
     cur_func_ = funcValue;
     cur_scope_ = cur_scope_->pushScope();
+    blockId_ = 0;
 
     entry_block_ = BasicBlock::create(cur_func_);
     entry_block_->setName(funcDef.ident->content + ".entry");
@@ -921,6 +936,7 @@ FunctionPtr Visitor::visitMainFuncDef(const MainFuncDef &mainFunc) {
         "main",
         {}
     );
+    blockId_ = 0;
     cur_scope_ = cur_scope_->pushScope();
     entry_block_ = BasicBlock::create(cur_func_);
     entry_block_->setName("main.entry");

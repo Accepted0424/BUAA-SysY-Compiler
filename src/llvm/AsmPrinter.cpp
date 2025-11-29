@@ -190,7 +190,7 @@ private:
         for (auto bbIt = func->basicBlockBegin(); bbIt != func->basicBlockEnd(); ++bbIt) {
             auto bb = *bbIt;
             out_ << valueName(bb) << ":\n";
-            for (auto instIt = bb->InstructionBegin(); instIt != bb->InstructionEnd(); ++instIt) {
+            for (auto instIt = bb->instructionBegin(); instIt != bb->instructionEnd(); ++instIt) {
                 printInstruction(*instIt);
             }
         }

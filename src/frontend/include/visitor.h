@@ -40,6 +40,7 @@ private:
     std::vector<BasicBlockPtr> continueTargets_;
 
     BasicBlockPtr entry_block_ = nullptr;
+    int blockId_ = 0;
 
     ValuePtr getLValAddress(const LVal &lval);
 
