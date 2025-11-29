@@ -618,7 +618,9 @@ void Visitor::visitVarDecl(const VarDecl &varDecl) {
         const bool isArray = (varDef->constExp != nullptr);
         const int arraySize = isArray && varDef->constExp ? visitConstExp(*varDef->constExp)->getValue() : 0;
         const bool isStaticLocal = isStatic && !cur_scope_->isGlobalScope();
-        const std::string storageName = isStaticLocal ? (cur_func_->getName() + ".static." + name) : name;
+        const std::string storageName = isStaticLocal
+            ? (cur_func_->getName() + ".static." + name + "." + std::to_string(staticLocalId_++))
+            : name;
 
         if (isStatic || cur_scope_->isGlobalScope()) {
             if (isArray) {
@@ -1123,6 +1125,7 @@ FunctionPtr Visitor::visitFuncDef(const FuncDef &funcDef) {
     cur_func_ = funcValue;
     cur_scope_ = cur_scope_->pushScope();
     blockId_ = 0;
+    staticLocalId_ = 0;
 
     entry_block_ = BasicBlock::create(cur_func_);
     entry_block_->setName(funcDef.ident->content + ".entry");
@@ -1159,6 +1162,7 @@ FunctionPtr Visitor::visitFuncDef(const FuncDef &funcDef) {
     }
     cur_block_ = nullptr;
     entry_block_ = nullptr;
+    staticLocalId_ = 0;
     return funcValue;
 }
 
@@ -1169,6 +1173,7 @@ FunctionPtr Visitor::visitMainFuncDef(const MainFuncDef &mainFunc) {
         {}
     );
     blockId_ = 0;
+    staticLocalId_ = 0;
     cur_scope_ = cur_scope_->pushScope();
     entry_block_ = BasicBlock::create(cur_func_);
     entry_block_->setName("main.entry");

@@ -42,6 +42,7 @@ private:
 
     BasicBlockPtr entry_block_ = nullptr;
     int blockId_ = 0;
+    int staticLocalId_ = 0;
 
     ValuePtr getLValAddress(const LVal &lval);
 
