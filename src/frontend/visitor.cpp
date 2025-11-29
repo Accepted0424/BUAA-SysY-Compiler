@@ -217,7 +217,7 @@ std::optional<int> Visitor::constValueOfLVal(const LVal &lval) {
     return std::nullopt;
 }
 
-std::optional<int> Visitor::evalConstExpValue(const Exp &exp) {
+std::optional<int> Visitor::evalConstAddWithLVal(const AddExp &root) {
     std::function<std::optional<int>(const AddExp&)> evalAdd;
     std::function<std::optional<int>(const MulExp&)> evalMul;
     std::function<std::optional<int>(const UnaryExp&)> evalUnary;
@@ -276,7 +276,15 @@ std::optional<int> Visitor::evalConstExpValue(const Exp &exp) {
         return res;
     };
 
-    return evalAdd(*exp.addExp);
+    return evalAdd(root);
+}
+
+std::optional<int> Visitor::evalConstExpValue(const Exp &exp) {
+    return evalConstAddWithLVal(*exp.addExp);
+}
+
+std::optional<int> Visitor::evalConstConstExp(const ConstExp &constExp) {
+    return evalConstAddWithLVal(*constExp.addExp);
 }
 
 ValuePtr Visitor::getLValAddress(const LVal &lval) {
@@ -462,6 +470,9 @@ ValuePtr Visitor::visitAddExp(const AddExp &addExp) {
 }
 
 ConstantIntPtr Visitor::visitConstExp(const ConstExp &constExp) {
+    if (auto valOpt = evalConstConstExp(constExp)) {
+        return ConstantInt::create(ir_module_.getContext()->getIntegerTy(), *valOpt);
+    }
     auto ctx = ir_module_.getContext();
 
     std::function<int(const AddExp&)> evalAdd;
