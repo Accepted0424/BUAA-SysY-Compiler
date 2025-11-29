@@ -36,6 +36,21 @@ private:
 
     bool inForLoop_ = false;
 
+    std::vector<BasicBlockPtr> breakTargets_;
+    std::vector<BasicBlockPtr> continueTargets_;
+
+    BasicBlockPtr entry_block_ = nullptr;
+
+    ValuePtr getLValAddress(const LVal &lval);
+
+    ValuePtr loadIfPointer(const ValuePtr &value);
+
+    ValuePtr toBool(const ValuePtr &value);
+
+    void insertInst(const InstructionPtr &inst, bool toEntry = false);
+
+    BasicBlockPtr newBlock(const std::string &hint);
+
     FunctionPtr visitFuncDef(const FuncDef &node);
 
     FunctionPtr visitMainFuncDef(const MainFuncDef &mainFunc);

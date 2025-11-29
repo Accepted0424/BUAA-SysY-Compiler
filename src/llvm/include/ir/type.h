@@ -86,6 +86,10 @@ public:
         return element_type_;
     }
 
+    int getElementNum() const {
+        return element_num_;
+    }
+
 private:
     std::shared_ptr<Type> element_type_;
     int element_num_;

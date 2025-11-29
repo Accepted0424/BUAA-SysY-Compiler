@@ -8,10 +8,14 @@ class BinaryInstruction : public Instruction {
 public:
     ~BinaryInstruction() override = default;
 
-protected:
     BinaryInstruction(ValueType valueType, TypePtr type, ValuePtr lhs,
-                      ValuePtr rhs) : Instruction(valueType, type) {
+                      ValuePtr rhs) : Instruction(valueType, type), lhs_(std::move(lhs)), rhs_(std::move(rhs)) {
+        addOperand(lhs_);
+        addOperand(rhs_);
     };
+
+    ValuePtr lhs_;
+    ValuePtr rhs_;
 };
 
 enum class BinaryOpType { ADD, SUB, MUL, DIV, MOD };
@@ -51,6 +55,8 @@ public:
         return std::make_shared<CompareOperator>(type, lhs, rhs, opType);
     }
 
+    ValuePtr getLhs() const { return lhs_; }
+    ValuePtr getRhs() const { return rhs_; }
     CompareOpType OpType() const { return op_type_; }
 
 private:
@@ -74,6 +80,10 @@ public:
         auto type = lhs->getType();
         return std::make_shared<LogicalOperator>(type, lhs, rhs, opType);
     }
+
+    ValuePtr getLhs() const { return lhs_; }
+    ValuePtr getRhs() const { return rhs_; }
+    LogicalOpType OpType() const { return op_type_; }
 
 private:
     LogicalOpType op_type_;

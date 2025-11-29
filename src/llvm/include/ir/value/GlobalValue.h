@@ -1,6 +1,7 @@
 #pragma once
 
 #include "User.h"
+#include "llvm/include/ir/value/Constant.h"
 
 /*
  * GlobalValue is a base class for all top-level components in a module.
@@ -19,6 +20,6 @@ public:
 protected:
     GlobalValue(ValueType valueType, TypePtr type, const std::string &name)
         : Constant(valueType, type) {
-        SetName(name);
+        setName(name);
     }
 };

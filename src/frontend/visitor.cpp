@@ -1,13 +1,100 @@
 #include "visitor.h"
 
+#include <functional>
+
 #include "logger.h"
 #include "llvm/include/ir/IrForward.h"
+#include "llvm/include/ir/type.h"
 #include "llvm/include/ir/value/Argument.h"
 #include "llvm/include/ir/value/ConstantArray.h"
 #include "llvm/include/ir/value/ConstantInt.h"
 #include "llvm/include/ir/value/GlobalVariable.h"
 #include "llvm/include/ir/value/inst/BinaryInstruction.h"
 #include "llvm/include/ir/value/inst/UnaryInstruction.h"
+#include "llvm/include/ir/value/inst/Instruction.h"
+
+namespace {
+ConstantIntPtr makeConst(LlvmContext* ctx, int value) {
+    return ConstantInt::create(ctx->getIntegerTy(), value);
+}
+}
+
+void Visitor::insertInst(const InstructionPtr &inst, bool toEntry) {
+    if (toEntry && entry_block_ != nullptr) {
+        entry_block_->insertInstruction(inst);
+        return;
+    }
+    if (cur_block_ != nullptr) {
+        cur_block_->insertInstruction(inst);
+    }
+}
+
+BasicBlockPtr Visitor::newBlock(const std::string &hint) {
+    auto bb = BasicBlock::create(cur_func_);
+    bb->setName(hint);
+    return bb;
+}
+
+ValuePtr Visitor::loadIfPointer(const ValuePtr &value) {
+    if (value == nullptr) {
+        return nullptr;
+    }
+    if (value->getType() && value->getType()->is(Type::ArrayTyID) &&
+        value->getValueType() != ValueType::GetElementPtrInstTy) {
+        return value;
+    }
+    switch (value->getValueType()) {
+        case ValueType::AllocaInstTy:
+        case ValueType::GlobalVariableTy:
+        case ValueType::GetElementPtrInstTy: {
+            auto load = LoadInst::create(ir_module_.getContext()->getIntegerTy(), value);
+            insertInst(load);
+            return load;
+        }
+        default:
+            return value;
+    }
+}
+
+ValuePtr Visitor::toBool(const ValuePtr &value) {
+    auto ctx = ir_module_.getContext();
+    auto rhs = makeConst(ctx, 0);
+    auto cmp = CompareOperator::create(CompareOpType::NEQ, loadIfPointer(value), rhs);
+    insertInst(cmp);
+    return cmp;
+}
+
+ValuePtr Visitor::getLValAddress(const LVal &lval) {
+    const std::string &name = lval.ident->content;
+    if (!cur_scope_->existInSymTable(name)) {
+        ErrorReporter::error(lval.lineno, ERR_UNDEFINED_NAME);
+        return nullptr;
+    }
+    auto symbol = cur_scope_->getSymbol(name);
+    auto base = symbol->value;
+    if (lval.index != nullptr) {
+        auto idxVal = loadIfPointer(visitExp(*lval.index));
+        if (idxVal == nullptr) {
+            return nullptr;
+        }
+        auto ctx = ir_module_.getContext();
+        std::vector<ValuePtr> indices;
+        auto baseType = base->getType();
+        TypePtr gepType = baseType;
+        if (baseType && baseType->is(Type::ArrayTyID)) {
+            auto arrType = std::static_pointer_cast<ArrayType>(baseType);
+            if (arrType->getElementNum() >= 0) {
+                indices.push_back(makeConst(ctx, 0));
+            }
+            gepType = arrType->getElementType();
+        }
+        indices.push_back(idxVal);
+        auto gep = GetElementPtrInst::create(gepType, base, indices);
+        insertInst(gep);
+        base = gep;
+    }
+    return base;
+}
 
 ValuePtr Visitor::visitPrimaryExp(const PrimaryExp &primaryExp) {
     switch (primaryExp.kind) {
@@ -15,19 +102,8 @@ ValuePtr Visitor::visitPrimaryExp(const PrimaryExp &primaryExp) {
             return visitExp(*primaryExp.exp);
 
         case PrimaryExp::LVAL: {
-            const std::string &name = primaryExp.lval->ident->content;
-            auto contex = ir_module_.getContext();
-            if (!cur_scope_->existInSymTable(name)) {
-                ErrorReporter::error(primaryExp.lineno, ERR_UNDEFINED_NAME);
-                return nullptr;
-            }
-            if (primaryExp.lval->index != nullptr) {
-                auto index = visitExp(*primaryExp.lval->index);
-                auto gep = GetElementPtrInst::create(contex->getIntegerTy());
-                return gep;
-            }
-            auto symbol = cur_scope_->getSymbol(name);
-            return symbol->value;  // symbol里保存的Value，比如AllocaInst或Constant
+            auto addr = getLValAddress(*primaryExp.lval);
+            return loadIfPointer(addr);
         }
 
         case PrimaryExp::NUMBER: {
@@ -55,57 +131,95 @@ ValuePtr Visitor::visitUnaryExp(const UnaryExp &unaryExp) {
             }
             std::vector<std::shared_ptr<Value>> args;
 
+            const size_t providedCnt = unaryExp.call->params ? unaryExp.call->params->params.size() : 0;
+            if (providedCnt != static_cast<size_t>(symbol->getParamCnt())) {
+                ErrorReporter::error(unaryExp.lineno, ERR_FUNC_ARG_COUNT_MISMATCH);
+            }
+
             if (unaryExp.call->params) {
-                // check params count
-                if (unaryExp.call->params->params.size() != symbol->getParamCnt()) {
-                    ErrorReporter::error(unaryExp.lineno, ERR_FUNC_ARG_COUNT_MISMATCH);
-                } else {
-                    // check params type
-                    for (size_t i = 0; i < unaryExp.call->params->params.size(); ++i) {
-                        auto expValue = visitExp(*unaryExp.call->params->params[i]);
-                        auto paramType = symbol->params[i];
-                        if (paramType != expValue->getType() || (expValue->getValueType() == ValueType::ConstantArrayTy)) {
+                for (size_t i = 0; i < unaryExp.call->params->params.size(); ++i) {
+                    auto paramType = symbol->params[i];
+                    auto argVal = visitExp(*unaryExp.call->params->params[i]);
+                    if (argVal == nullptr) {
+                        ErrorReporter::error(unaryExp.lineno, ERR_FUNC_ARG_TYPE_MISMATCH);
+                        args.push_back(argVal);
+                        continue;
+                    }
+
+                    if (paramType->is(Type::ArrayTyID)) {
+                        if (argVal && argVal->getType() && argVal->getType()->is(Type::ArrayTyID)) {
+                            auto argArrayType = std::static_pointer_cast<ArrayType>(argVal->getType());
+                            auto paramArrayType = std::static_pointer_cast<ArrayType>(paramType);
+                            if (argArrayType->getElementNum() >= 0 && paramArrayType->getElementNum() < 0) {
+                                auto zero = makeConst(ir_module_.getContext(), 0);
+                                auto decay = GetElementPtrInst::create(paramType, argVal, {zero, zero});
+                                insertInst(decay);
+                                argVal = decay;
+                            }
+                            if (argVal->getType() != paramType) {
+                                ErrorReporter::error(unaryExp.lineno, ERR_FUNC_ARG_TYPE_MISMATCH);
+                            }
+                        } else {
+                            ErrorReporter::error(unaryExp.lineno, ERR_FUNC_ARG_TYPE_MISMATCH);
+                        }
+                        args.push_back(argVal);
+                    } else {
+                        auto expValue = loadIfPointer(argVal);
+                        if (expValue == nullptr ||
+                            paramType != expValue->getType() ||
+                            (expValue->getValueType() == ValueType::ConstantArrayTy)) {
                             ErrorReporter::error(unaryExp.lineno, ERR_FUNC_ARG_TYPE_MISMATCH);
                         }
                         args.push_back(expValue);
                     }
                 }
             }
-            return CallInst::create(std::dynamic_pointer_cast<Function>(symbol->value), args);
+            auto call = CallInst::create(std::dynamic_pointer_cast<Function>(symbol->value), args);
+            insertInst(call);
+            return call;
 
         }
 
         case UnaryExp::UNARY_OP: {
-            auto rhs = visitUnaryExp(*unaryExp.unary->expr);
+            auto rhs = loadIfPointer(visitUnaryExp(*unaryExp.unary->expr));
+            ValuePtr res = nullptr;
             switch (unaryExp.unary->op->kind) {
                 case UnaryOp::PLUS:
-                    return UnaryOperator::create(UnaryOpType::POS, rhs);
+                    res = UnaryOperator::create(UnaryOpType::POS, rhs);
+                    break;
                 case UnaryOp::MINU:
-                    return UnaryOperator::create(UnaryOpType::NEG, rhs);
+                    res = UnaryOperator::create(UnaryOpType::NEG, rhs);
+                    break;
                 case UnaryOp::NOT:
-                    return UnaryOperator::create(UnaryOpType::NOT, rhs);
+                    res = UnaryOperator::create(UnaryOpType::NOT, rhs);
+                    break;
                 default:
                     LOG_ERROR("Unreachable in Visitor::visitUnaryExp");
                     return nullptr;
             }
+            insertInst(std::dynamic_pointer_cast<Instruction>(res));
+            return res;
         }
     }
     return nullptr;
 }
 
 ValuePtr Visitor::visitMulExp(const MulExp &mulExp) {
-    auto lhs = visitUnaryExp(*mulExp.first);
+    auto lhs = loadIfPointer(visitUnaryExp(*mulExp.first));
     for (const auto &[op, rhs] : mulExp.rest) {
-        auto rhsVal = visitUnaryExp(*rhs);
+        auto rhsVal = loadIfPointer(visitUnaryExp(*rhs));
         switch (op) {
             case MulExp::MULT:
                 lhs = BinaryOperator::create(BinaryOpType::MUL, lhs, rhsVal);
+                insertInst(std::dynamic_pointer_cast<Instruction>(lhs));
                 break;
             case MulExp::DIV:
                 lhs = BinaryOperator::create(BinaryOpType::DIV, lhs, rhsVal);
+                insertInst(std::dynamic_pointer_cast<Instruction>(lhs));
                 break;
             case MulExp::MOD:
                 lhs = BinaryOperator::create(BinaryOpType::MOD, lhs, rhsVal);
+                insertInst(std::dynamic_pointer_cast<Instruction>(lhs));
                 break;
         }
     }
@@ -113,15 +227,17 @@ ValuePtr Visitor::visitMulExp(const MulExp &mulExp) {
 }
 
 ValuePtr Visitor::visitAddExp(const AddExp &addExp) {
-    auto lhs = visitMulExp(*addExp.first);
+    auto lhs = loadIfPointer(visitMulExp(*addExp.first));
     for (const auto &[op, rhs] : addExp.rest) {
-        auto rhsVal = visitMulExp(*rhs);
+        auto rhsVal = loadIfPointer(visitMulExp(*rhs));
         switch (op) {
             case AddExp::PLUS:
                 lhs = BinaryOperator::create(BinaryOpType::ADD, lhs, rhsVal);
+                insertInst(std::dynamic_pointer_cast<Instruction>(lhs));
                 break;
             case AddExp::MINU:
                 lhs = BinaryOperator::create(BinaryOpType::SUB, lhs, rhsVal);
+                insertInst(std::dynamic_pointer_cast<Instruction>(lhs));
                 break;
         }
     }
@@ -129,14 +245,63 @@ ValuePtr Visitor::visitAddExp(const AddExp &addExp) {
 }
 
 ConstantIntPtr Visitor::visitConstExp(const ConstExp &constExp) {
-    auto value = visitAddExp(*constExp.addExp);
+    auto ctx = ir_module_.getContext();
 
-    if (value->getValueType() != ValueType::ConstantIntTy) {
-        LOG_ERROR("ConstExp did not evaluate to a ConstantInt");
-        return nullptr;
-    }
+    std::function<int(const AddExp&)> evalAdd;
+    std::function<int(const MulExp&)> evalMul;
+    std::function<int(const UnaryExp&)> evalUnary;
+    std::function<int(const PrimaryExp&)> evalPrimary;
 
-    return std::dynamic_pointer_cast<ConstantInt>(value);
+    evalPrimary = [&](const PrimaryExp &p) -> int {
+        switch (p.kind) {
+            case PrimaryExp::NUMBER:
+                return std::stoi(p.number->value);
+            case PrimaryExp::EXP:
+                return evalAdd(*p.exp->addExp);
+            case PrimaryExp::LVAL:
+            default:
+                return 0;
+        }
+    };
+
+    evalUnary = [&](const UnaryExp &u) -> int {
+        if (u.kind == UnaryExp::PRIMARY) return evalPrimary(*u.primary);
+        if (u.kind == UnaryExp::UNARY_OP) {
+            auto val = evalUnary(*u.unary->expr);
+            switch (u.unary->op->kind) {
+                case UnaryOp::PLUS: return val;
+                case UnaryOp::MINU: return -val;
+                case UnaryOp::NOT: return !val;
+            }
+        }
+        return 0;
+    };
+
+    evalMul = [&](const MulExp &m) -> int {
+        int res = evalUnary(*m.first);
+        for (const auto &[op, rhs] : m.rest) {
+            int rhsVal = evalUnary(*rhs);
+            switch (op) {
+                case MulExp::MULT: res *= rhsVal; break;
+                case MulExp::DIV: res /= rhsVal; break;
+                case MulExp::MOD: res %= rhsVal; break;
+            }
+        }
+        return res;
+    };
+
+    evalAdd = [&](const AddExp &a) -> int {
+        int res = evalMul(*a.first);
+        for (const auto &[op, rhs] : a.rest) {
+            int rhsVal = evalMul(*rhs);
+            if (op == AddExp::PLUS) res += rhsVal;
+            else res -= rhsVal;
+        }
+        return res;
+    };
+
+    int val = evalAdd(*constExp.addExp);
+    return ConstantInt::create(ctx->getIntegerTy(), val);
 }
 
 ValuePtr Visitor::visitExp(const Exp &exp) {
@@ -151,70 +316,60 @@ void Visitor::visitConstDecl(const ConstDecl &constDecl) {
         const int lineno = constDef->lineno;
 
         if (constDef->constExp == nullptr) {
-            // --- 普通常量 ---
+            // scalar constant
+            auto symbol = std::make_shared<ConstIntSymbol>(name, nullptr, lineno);
             if (constDef->constInitVal->kind == ConstInitVal::EXP) {
-                auto symbol = std::make_shared<ConstIntSymbol>(name, nullptr, lineno);
                 auto val = visitConstExp(*constDef->constInitVal->exp);
-
                 if (cur_func_ != nullptr) {
-                    // 如果是在函数内定义的常量，需要把常量值存储到栈上
-                    auto alloca = AllocaInst::create(context->getIntegerTy());
-                    auto store = StoreInst::create(context->getIntegerTy(), val, alloca);
+                    // local
+                    auto alloca = AllocaInst::create(context->getIntegerTy(), name);
+                    insertInst(alloca, true);
+                    auto store = StoreInst::create(val, alloca);
+                    insertInst(store);
                     symbol->value = alloca;
-                    (*cur_func_->basicBlockBegin())->insertInstruction(alloca);
-                    (*cur_func_->basicBlockBegin())->insertInstruction(store);
                 } else {
-                    // 全局常量，直接用 ConstantInt 即可
+                    // global
                     auto globalVar = GlobalVariable::create(context->getIntegerTy(), name, val, true);
                     symbol->value = globalVar;
+                    ir_module_.addGlobalVar(globalVar);
                 }
-
-                cur_scope_->addSymbol(symbol);
-            } else if (constDef->constInitVal->kind == ConstInitVal::LIST) {
-                LOG_ERROR("Expected single ConstExp for non-array ConstDef");
-            } else {
-                LOG_ERROR("Unreachable in Visitor::visitConstDecl");
             }
+            cur_scope_->addSymbol(symbol);
         } else {
-            // --- 常量数组 ---
-            if (constDef->constInitVal->kind == ConstInitVal::LIST) {
-                auto symbol = std::make_shared<ConstIntArraySymbol>(name, nullptr, lineno);
-
-                auto size = visitConstExp(*constDef->constExp);
-
-                auto arrayType = context->getArrayTy(context->getIntegerTy());
-
-                auto initialValList = std::vector<ConstantIntPtr>{};
-
-                for (const auto &constExp : constDef->constInitVal->list) {
-                    auto val = visitConstExp(*constExp);
-                    initialValList.push_back(val);
-                }
-
-                if (cur_func_ != nullptr) {
-                    // 如果是在函数内定义的常量数组，需要把常量值存储到栈上
-                    auto alloca = AllocaInst::create(arrayType);
-                    (*cur_func_->basicBlockBegin())->insertInstruction(alloca);
-
-                    for (int i = 0; i < initialValList.size(); i++) {
-                        auto getElementPtr = GetElementPtrInst::create(context->getIntegerTy(), alloca, {0, i});
-                        (*cur_func_->basicBlockBegin())->insertInstruction(getElementPtr);
-                    }
-
-                    symbol->value = alloca;
-                } else {
-                    // 全局常量数组，直接用 ConstantArray 即可
-                    auto constArray = ConstantArray::create(arrayType, initialValList);
-                    auto globalVar = GlobalVariable::create(arrayType, name, constArray, true);
-                    symbol->value = globalVar;
-                }
-
-                cur_scope_->addSymbol(symbol);
-            } else if (constDef->constInitVal->kind == ConstInitVal::EXP) {
-                LOG_ERROR("Expected single ConstExp for non-array ConstDef");
-            } else {
-                LOG_ERROR("Unreachable in Visitor::visitConstDecl");
+            // constant array
+            auto symbol = std::make_shared<ConstIntArraySymbol>(name, nullptr, lineno);
+            const int arraySize = visitConstExp(*constDef->constExp)->getValue();
+            auto arrayType = context->getArrayTy(context->getIntegerTy(), arraySize);
+            auto initialValList = std::vector<ConstantIntPtr>{};
+            for (const auto &constExp : constDef->constInitVal->list) {
+                initialValList.push_back(visitConstExp(*constExp));
             }
+            if (static_cast<int>(initialValList.size()) > arraySize) {
+                initialValList.resize(arraySize);
+            }
+            while (static_cast<int>(initialValList.size()) < arraySize) {
+                initialValList.push_back(makeConst(context, 0));
+            }
+
+            if (cur_func_ != nullptr) {
+                // local
+                auto alloca = AllocaInst::create(arrayType, name);
+                insertInst(alloca, true);
+                for (int i = 0; i < static_cast<int>(initialValList.size()); i++) {
+                    auto idxConst = makeConst(context, i);
+                    auto gep = GetElementPtrInst::create(context->getIntegerTy(), alloca, {makeConst(context, 0), idxConst});
+                    insertInst(gep);
+                    auto store = StoreInst::create(initialValList[i], gep);
+                    insertInst(store);
+                }
+                symbol->value = alloca;
+            } else {
+                auto constArray = ConstantArray::create(arrayType, initialValList);
+                auto globalVar = GlobalVariable::create(arrayType, name, constArray, true);
+                symbol->value = globalVar;
+                ir_module_.addGlobalVar(globalVar);
+            }
+            cur_scope_->addSymbol(symbol);
         }
     }
 }
@@ -227,77 +382,87 @@ void Visitor::visitVarDecl(const VarDecl &varDecl) {
     for (const auto &varDef: varDecl.varDefs) {
         const std::string &name = varDef->ident->content;
         const int lineno = varDef->lineno;
-        std::shared_ptr<Value> value = nullptr;
         std::shared_ptr<Symbol> symbol = nullptr;
         const bool isArray = (varDef->constExp != nullptr);
-
-        if (varDef->constExp != nullptr) {
-            auto size = visitConstExp(*varDef->constExp);
-        }
+        const int arraySize = isArray && varDef->constExp ? visitConstExp(*varDef->constExp)->getValue() : 0;
 
         if (isStatic || cur_scope_->isGlobalScope()) {
-            // --- static 或 global ---
             if (isArray) {
-                auto type = context->getArrayTy(context->getIntegerTy());
-                auto gv = GlobalVariable::create(type, name, false);
+                auto type = context->getArrayTy(context->getIntegerTy(), arraySize);
+                std::vector<ConstantIntPtr> initList;
+                if (varDef->initVal && varDef->initVal->kind == InitVal::LIST) {
+                    for (const auto &exp : varDef->initVal->list) {
+                        auto val = visitExp(*exp);
+                        auto ci = std::dynamic_pointer_cast<ConstantInt>(val);
+                        if (ci) {
+                            initList.push_back(ci);
+                        }
+                    }
+                }
+                if (static_cast<int>(initList.size()) > arraySize) {
+                    initList.resize(arraySize);
+                }
+                while (static_cast<int>(initList.size()) < arraySize) {
+                    initList.push_back(makeConst(context, 0));
+                }
+                auto initVal = ConstantArray::create(type, initList);
+                auto gv = GlobalVariable::create(type, name, initVal, false);
+
                 if (isStatic) {
                     symbol = std::make_shared<StaticIntArraySymbol>(name, gv, lineno);
                 } else {
                     symbol = std::make_shared<IntArraySymbol>(name, gv, lineno);
                 }
-                if (varDef->initVal != nullptr) {
-                    if (varDef->initVal->kind == InitVal::LIST) {
-                        for (const auto &exp : varDef->initVal->list) {
-                            auto val = visitExp(*exp);
-                        }
-                    } else {
-                        LOG_ERROR("Unreachable in Visitor::visitVarDecl");
-                    }
-                }
+
+                ir_module_.addGlobalVar(gv);
             } else {
-                auto gv = GlobalVariable::create(context->getIntegerTy(), name, false);
+                ValuePtr initVal = nullptr;
+                if (varDef->initVal && varDef->initVal->kind == InitVal::EXP) {
+                    initVal = visitExp(*varDef->initVal->exp);
+                }
+                auto gv = GlobalVariable::create(context->getIntegerTy(), name, initVal, false);
+
                 if (isStatic) {
                     symbol = std::make_shared<StaticIntSymbol>(name, gv, lineno);
                 } else {
                     symbol = std::make_shared<IntSymbol>(name, gv, lineno);
                 }
-                if (varDef->initVal != nullptr) {
-                    if (varDef->initVal->kind == InitVal::EXP) {
-                        auto val = visitExp(*varDef->initVal->exp);
-                    } else {
-                        LOG_ERROR("Unreachable in Visitor::visitVarDecl");
-                    }
-                }
+
+                ir_module_.addGlobalVar(gv);
             }
         } else {
-            // --- 普通局部变量 ---
+            // local variables
             if (isArray) {
-                if (varDef->initVal != nullptr) {
-                    if (varDef->initVal->kind == InitVal::LIST) {
-                        for (const auto &exp : varDef->initVal->list) {
-                            auto val = visitExp(*exp);
-                        }
-                    } else {
-                        LOG_ERROR("Unreachable in Visitor::visitVarDecl");
-                    }
-                }
-                auto type = context->getArrayTy(context->getIntegerTy());
-                auto alloca = AllocaInst::create(type);
+                auto type = context->getArrayTy(context->getIntegerTy(), arraySize);
+                auto alloca = AllocaInst::create(type, name);
+                insertInst(alloca, true);
                 symbol = std::make_shared<IntArraySymbol>(name, alloca, lineno);
-            } else {
-                if (varDef->initVal != nullptr) {
-                    if (varDef->initVal->kind == InitVal::EXP) {
-                        auto val = visitExp(*varDef->initVal->exp);
-                    } else {
-                        LOG_ERROR("Unreachable in Visitor::visitVarDecl");
+                if (varDef->initVal && varDef->initVal->kind == InitVal::LIST) {
+                    int idx = 0;
+                    for (const auto &exp : varDef->initVal->list) {
+                        if (idx >= arraySize && arraySize > 0) break;
+                        auto val = loadIfPointer(visitExp(*exp));
+                        auto idxConst = makeConst(context, idx++);
+                        auto gep = GetElementPtrInst::create(context->getIntegerTy(), alloca, {makeConst(context, 0), idxConst});
+                        insertInst(gep);
+                        insertInst(StoreInst::create(val, gep));
                     }
                 }
-                auto alloca = AllocaInst::create(context->getIntegerTy());
+            } else {
+                auto alloca = AllocaInst::create(context->getIntegerTy(), name);
+                insertInst(alloca, true);
                 symbol = std::make_shared<IntSymbol>(name, alloca, lineno);
+                if (varDef->initVal && varDef->initVal->kind == InitVal::EXP) {
+                    auto val = loadIfPointer(visitExp(*varDef->initVal->exp));
+                    auto store = StoreInst::create(val, alloca);
+                    insertInst(store);
+                }
             }
         }
 
-        cur_scope_->addSymbol(symbol);
+        if (symbol) {
+            cur_scope_->addSymbol(symbol);
+        }
     }
 }
 
@@ -312,83 +477,137 @@ void Visitor::visitDecl(const Decl &decl) {
 }
 
 ValuePtr Visitor::visitRelExp(const RelExp &relExp) {
-    auto lhs = visitAddExp(*relExp.addExpFirst);
+    auto lhs = loadIfPointer(visitAddExp(*relExp.addExpFirst));
     if (lhs == nullptr) {
         return nullptr;
     }
     for (const auto &[op, rhs] : relExp.addExpRest) {
-        auto rhsVal = visitAddExp(*rhs);
+        auto rhsVal = loadIfPointer(visitAddExp(*rhs));
         if (rhsVal == nullptr) {
             return nullptr;
         }
+        ValuePtr cmp = nullptr;
         switch (op) {
             case RelExp::LSS:
-                lhs = CompareOperator::create(CompareOpType::LSS, lhs, rhsVal);
+                cmp = CompareOperator::create(CompareOpType::LSS, lhs, rhsVal);
                 break;
             case RelExp::GRE:
-                lhs = CompareOperator::create(CompareOpType::GRE, lhs, rhsVal);
+                cmp = CompareOperator::create(CompareOpType::GRE, lhs, rhsVal);
                 break;
             case RelExp::LEQ:
-                lhs = CompareOperator::create(CompareOpType::LEQ, lhs, rhsVal);
+                cmp = CompareOperator::create(CompareOpType::LEQ, lhs, rhsVal);
                 break;
             case RelExp::GEQ:
-                lhs = CompareOperator::create(CompareOpType::GEQ, lhs, rhsVal);
+                cmp = CompareOperator::create(CompareOpType::GEQ, lhs, rhsVal);
                 break;
         }
+        insertInst(std::dynamic_pointer_cast<Instruction>(cmp));
+        lhs = cmp;
     }
     return lhs;
 }
 
 ValuePtr Visitor::visitEqExp(const EqExp &eqExp) {
-    auto lhs = visitRelExp(*eqExp.relExpFirst);
+    auto lhs = loadIfPointer(visitRelExp(*eqExp.relExpFirst));
     if (lhs == nullptr) {
         return nullptr;
     }
     for (const auto &[op, rhs] : eqExp.relExpRest) {
-        auto rhsVal = visitRelExp(*rhs);
+        auto rhsVal = loadIfPointer(visitRelExp(*rhs));
         if (rhsVal == nullptr) {
             return nullptr;
         }
+        ValuePtr cmp = nullptr;
         switch (op) {
             case EqExp::EQL:
-                lhs = CompareOperator::create(CompareOpType::EQL, lhs, rhsVal);
+                cmp = CompareOperator::create(CompareOpType::EQL, lhs, rhsVal);
                 break;
             case EqExp::NEQ:
-                lhs = CompareOperator::create(CompareOpType::NEQ, lhs, rhsVal);
+                cmp = CompareOperator::create(CompareOpType::NEQ, lhs, rhsVal);
                 break;
         }
+        insertInst(std::dynamic_pointer_cast<Instruction>(cmp));
+        lhs = cmp;
     }
     return lhs;
 }
 
 ValuePtr Visitor::visitLAndExp(const LAndExp &lAndExp) {
-    auto lhs = visitEqExp(*lAndExp.eqExps[0]);
-    if (lhs == nullptr) {
-        return nullptr;
-    }
+    auto ctx = ir_module_.getContext();
+    auto resultAlloca = AllocaInst::create(ctx->getIntegerTy());
+    insertInst(resultAlloca, true);
+
+    auto falseBlock = newBlock("land.false");
+    auto trueBlock = newBlock("land.true");
+    auto endBlock = newBlock("land.end");
+
+    // store false once
+    cur_block_ = falseBlock;
+    insertInst(StoreInst::create(makeConst(ctx, 0), resultAlloca));
+    insertInst(JumpInst::create(endBlock));
+
+    cur_block_ = trueBlock;
+    insertInst(StoreInst::create(makeConst(ctx, 1), resultAlloca));
+    insertInst(JumpInst::create(endBlock));
+
+    // start chain
+    cur_block_ = newBlock("land.entry");
+    auto condVal = toBool(visitEqExp(*lAndExp.eqExps[0]));
+    auto nextBlock = newBlock("land.next");
+    insertInst(BranchInst::create(condVal, nextBlock, falseBlock));
+
+    cur_block_ = nextBlock;
     for (size_t i = 1; i < lAndExp.eqExps.size(); ++i) {
-        auto rhs = visitEqExp(*lAndExp.eqExps[i]);
-        if (rhs == nullptr) {
-            return nullptr;
-        }
-        lhs = LogicalOperator::create(LogicalOpType::AND, lhs, rhs);
+        condVal = toBool(visitEqExp(*lAndExp.eqExps[i]));
+        const bool isLast = (i == lAndExp.eqExps.size() - 1);
+        auto next = isLast ? trueBlock : newBlock("land.next");
+        insertInst(BranchInst::create(condVal, next, falseBlock));
+        cur_block_ = next;
     }
-    return lhs;
+
+    cur_block_ = endBlock;
+    auto loaded = LoadInst::create(ctx->getIntegerTy(), resultAlloca);
+    insertInst(loaded);
+    return loaded;
 }
 
 ValuePtr Visitor::visitLOrExp(const LOrExp &lOrExp) {
-    auto lhs = visitLAndExp(*lOrExp.lAndExps[0]);
-    if (lhs == nullptr) {
-        return nullptr;
-    }
+    auto ctx = ir_module_.getContext();
+    auto resultAlloca = AllocaInst::create(ctx->getIntegerTy());
+    insertInst(resultAlloca, true);
+
+    auto trueBlock = newBlock("lor.true");
+    auto falseBlock = newBlock("lor.false");
+    auto endBlock = newBlock("lor.end");
+
+    // store true once
+    cur_block_ = trueBlock;
+    insertInst(StoreInst::create(makeConst(ctx, 1), resultAlloca));
+    insertInst(JumpInst::create(endBlock));
+
+    cur_block_ = falseBlock;
+    insertInst(StoreInst::create(makeConst(ctx, 0), resultAlloca));
+    insertInst(JumpInst::create(endBlock));
+
+    // start chain
+    cur_block_ = newBlock("lor.entry");
+    auto condVal = toBool(visitLAndExp(*lOrExp.lAndExps[0]));
+    auto nextBlock = newBlock("lor.next");
+    insertInst(BranchInst::create(condVal, trueBlock, nextBlock));
+
+    cur_block_ = nextBlock;
     for (size_t i = 1; i < lOrExp.lAndExps.size(); ++i) {
-        auto rhs = visitLAndExp(*lOrExp.lAndExps[i]);
-        if (rhs == nullptr) {
-            return nullptr;
-        }
-        lhs = LogicalOperator::create(LogicalOpType::OR, lhs, rhs);
+        condVal = toBool(visitLAndExp(*lOrExp.lAndExps[i]));
+        const bool isLast = (i == lOrExp.lAndExps.size() - 1);
+        auto next = isLast ? falseBlock : newBlock("lor.next");
+        insertInst(BranchInst::create(condVal, trueBlock, next));
+        cur_block_ = next;
     }
-    return lhs;
+
+    cur_block_ = endBlock;
+    auto loaded = LoadInst::create(ctx->getIntegerTy(), resultAlloca);
+    insertInst(loaded);
+    return loaded;
 }
 
 ValuePtr Visitor::visitCond(const Cond &cond) {
@@ -397,12 +616,6 @@ ValuePtr Visitor::visitCond(const Cond &cond) {
 
 void Visitor::visitForStmt(const ForStmt &forStmt) {
     for (const auto &[lVal, exp] : forStmt.assigns) {
-        if (lVal->index != nullptr) {
-            visitExp(*lVal->index);
-        }
-        if (exp != nullptr) {
-            visitExp(*exp);
-        }
         if (!cur_scope_->existInSymTable(lVal->ident->content)) {
             ErrorReporter::error(lVal->lineno, ERR_UNDEFINED_NAME);
             break;
@@ -410,7 +623,11 @@ void Visitor::visitForStmt(const ForStmt &forStmt) {
         if (cur_scope_->getSymbol(lVal->ident->content)->type == CONST_INT ||
             cur_scope_->getSymbol(lVal->ident->content)->type == CONST_INT_ARRAY) {
             ErrorReporter::error(forStmt.lineno, ERR_CONST_ASSIGNMENT);
+            continue;
         }
+        auto addr = getLValAddress(*lVal);
+        auto val = loadIfPointer(visitExp(*exp));
+        insertInst(StoreInst::create(val, addr));
     }
 }
 
@@ -419,10 +636,6 @@ bool Visitor::visitStmt(const Stmt &stmt, bool isLast) {
 
     switch (stmt.kind) {
         case Stmt::ASSIGN:
-            if (stmt.assignStmt.lVal->index != nullptr) {
-                visitExp(*stmt.assignStmt.lVal->index);
-            }
-            visitExp(*stmt.assignStmt.exp);
             if (!cur_scope_->existInSymTable(stmt.assignStmt.lVal->ident->content)) {
                 ErrorReporter::error(stmt.lineno, ERR_UNDEFINED_NAME);
                 break;
@@ -430,6 +643,11 @@ bool Visitor::visitStmt(const Stmt &stmt, bool isLast) {
             if (cur_scope_->getSymbol(stmt.assignStmt.lVal->ident->content)->type == CONST_INT ||
                 cur_scope_->getSymbol(stmt.assignStmt.lVal->ident->content)->type == CONST_INT_ARRAY) {
                 ErrorReporter::error(stmt.lineno, ERR_CONST_ASSIGNMENT);
+            }
+            if (cur_block_ != nullptr) {
+                auto addr = getLValAddress(*stmt.assignStmt.lVal);
+                auto val = loadIfPointer(visitExp(*stmt.assignStmt.exp));
+                insertInst(StoreInst::create(val, addr));
             }
             break;
         case Stmt::EXP:
@@ -444,13 +662,27 @@ bool Visitor::visitStmt(const Stmt &stmt, bool isLast) {
             break;
         case Stmt::IF:
             if (stmt.ifStmt.cond != nullptr) {
-                visitCond(*stmt.ifStmt.cond);
-            }
-            if (stmt.ifStmt.thenStmt != nullptr) {
-                visitStmt(*stmt.ifStmt.thenStmt, false);
-            }
-            if (stmt.ifStmt.elseStmt != nullptr) {
-                visitStmt(*stmt.ifStmt.elseStmt, false);
+                auto condVal = toBool(visitCond(*stmt.ifStmt.cond));
+                auto thenBB = newBlock("if.then");
+                auto endBB = newBlock("if.end");
+                BasicBlockPtr elseBB = stmt.ifStmt.elseStmt ? newBlock("if.else") : endBB;
+                insertInst(BranchInst::create(condVal, thenBB, elseBB));
+
+                cur_block_ = thenBB;
+                bool thenReturn = visitStmt(*stmt.ifStmt.thenStmt, false);
+                if (!thenReturn && cur_block_ != nullptr) {
+                    insertInst(JumpInst::create(endBB));
+                }
+
+                if (stmt.ifStmt.elseStmt != nullptr) {
+                    cur_block_ = elseBB;
+                    bool elseReturn = visitStmt(*stmt.ifStmt.elseStmt, false);
+                    if (!elseReturn && cur_block_ != nullptr) {
+                        insertInst(JumpInst::create(endBB));
+                    }
+                }
+
+                cur_block_ = endBB;
             }
             break;
         case Stmt::FOR:
@@ -458,37 +690,71 @@ bool Visitor::visitStmt(const Stmt &stmt, bool isLast) {
             if (stmt.forStmt.forStmtFirst != nullptr) {
                 visitForStmt(*stmt.forStmt.forStmtFirst);
             }
-            if (stmt.forStmt.cond != nullptr) {
-                visitCond(*stmt.forStmt.cond);
+            {
+                auto condBB = newBlock("for.cond");
+                auto bodyBB = newBlock("for.body");
+                auto stepBB = newBlock("for.step");
+                auto endBB = newBlock("for.end");
+
+                insertInst(JumpInst::create(condBB));
+                cur_block_ = condBB;
+
+                ValuePtr condVal = stmt.forStmt.cond ? toBool(visitCond(*stmt.forStmt.cond)) : makeConst(ir_module_.getContext(), 1);
+                insertInst(BranchInst::create(condVal, bodyBB, endBB));
+
+                breakTargets_.push_back(endBB);
+                continueTargets_.push_back(stepBB);
+
+                cur_block_ = bodyBB;
+                visitStmt(*stmt.forStmt.stmt, false);
+                if (cur_block_ != nullptr) {
+                    insertInst(JumpInst::create(stepBB));
+                }
+
+                cur_block_ = stepBB;
+                if (stmt.forStmt.forStmtSecond != nullptr) {
+                    visitForStmt(*stmt.forStmt.forStmtSecond);
+                }
+                insertInst(JumpInst::create(condBB));
+
+                breakTargets_.pop_back();
+                continueTargets_.pop_back();
+
+                cur_block_ = endBB;
             }
-            if (stmt.forStmt.forStmtSecond != nullptr) {
-                visitForStmt(*stmt.forStmt.forStmtSecond);
-            }
-            visitStmt(*stmt.forStmt.stmt, false);
             inForLoop_ = false;
             break;
         case Stmt::BREAK:
             if (!inForLoop_) {
                 ErrorReporter::error(stmt.lineno, ERR_BREAK_CONTINUE_OUTSIDE_LOOP);
+            } else {
+                insertInst(JumpInst::create(breakTargets_.back()));
+                cur_block_ = nullptr;
             }
             break;
         case Stmt::CONTINUE:
             if (!inForLoop_) {
                 ErrorReporter::error(stmt.lineno, ERR_BREAK_CONTINUE_OUTSIDE_LOOP);
+            } else {
+                insertInst(JumpInst::create(continueTargets_.back()));
+                cur_block_ = nullptr;
             }
             break;
         case Stmt::RETURN:
             hasReturn = true;
             if (stmt.returnExp != nullptr) {
-                auto returnExpValue = visitExp(*stmt.returnExp);
+                auto returnExpValue = loadIfPointer(visitExp(*stmt.returnExp));
                 if (cur_func_->getReturnType()->is(Type::VoidTyID) && !returnExpValue->getType()->is(Type::VoidTyID)) {
                     ErrorReporter::error(stmt.lineno, ERR_VOID_FUNC_RETURN_MISMATCH);
                 }
+                insertInst(ReturnInst::create(returnExpValue));
             } else {
                 if (!cur_func_->getReturnType()->is(Type::VoidTyID)) {
                     // ErrorReporter::error(stmt.lineno, ERR_NONVOID_FUNC_MISSING_RETURN);
                 }
+                insertInst(ReturnInst::create());
             }
+            cur_block_ = nullptr;
             break;
         case Stmt::PRINTF:
             auto str = stmt.printfStmt.str;
@@ -507,8 +773,26 @@ bool Visitor::visitStmt(const Stmt &stmt, bool isLast) {
                 ErrorReporter::error(stmt.lineno, ERR_PRINTF_ARG_MISMATCH);
             }
 
-            for (const auto &arg : stmt.printfStmt.args) {
-                visitExp(*arg);
+            auto putchSym = cur_scope_->getFuncSymbol("putch");
+            auto putintSym = cur_scope_->getFuncSymbol("putint");
+
+            size_t argIdx = 0;
+            for (size_t i = 0; i < str.size(); ++i) {
+                if (str[i] == '%' && i + 1 < str.size() && str[i + 1] == 'd') {
+                    auto val = loadIfPointer(visitExp(*stmt.printfStmt.args[argIdx++]));
+                    auto call = CallInst::create(std::dynamic_pointer_cast<Function>(putintSym->value), {val});
+                    insertInst(call);
+                    ++i;
+                } else if (str[i] == '\\' && i + 1 < str.size() && str[i + 1] == 'n') {
+                    auto call = CallInst::create(std::dynamic_pointer_cast<Function>(putchSym->value),
+                        {makeConst(ir_module_.getContext(), '\n')});
+                    insertInst(call);
+                    ++i;
+                } else if (str[i] != '\"') {
+                    auto call = CallInst::create(std::dynamic_pointer_cast<Function>(putchSym->value),
+                        {makeConst(ir_module_.getContext(), str[i])});
+                    insertInst(call);
+                }
             }
             break;
     }
@@ -539,6 +823,9 @@ void Visitor::visitBlock(const Block &block, bool isFuncBlock) {
     }
 
     for (const auto &blockItem: block.blockItems) {
+        if (cur_block_ == nullptr) {
+            break;
+        }
         if (isFuncBlock && (&blockItem == &block.blockItems.back())) {
             bool hasReturn = visitBlockItem(*blockItem, true);
             if (!hasReturn && !cur_func_->getReturnType()->is(Type::VoidTyID)) {
@@ -590,19 +877,25 @@ FunctionPtr Visitor::visitFuncDef(const FuncDef &funcDef) {
     cur_func_ = funcValue;
     cur_scope_ = cur_scope_->pushScope();
 
+    entry_block_ = BasicBlock::create(cur_func_);
+    entry_block_->setName(funcDef.ident->content + ".entry");
+    cur_block_ = entry_block_;
+
     if (funcDef.funcFParams != nullptr) {
-        for (const auto &param: funcDef.funcFParams->params) {
+        for (size_t idx = 0; idx < funcDef.funcFParams->params.size(); ++idx) {
+            const auto &param = funcDef.funcFParams->params[idx];
             // Btype is always 'int'
             std::shared_ptr<Symbol> sym;
             if (!param->isArray) {
                 auto allocaValue = AllocaInst::create(context->getIntegerTy());
+                insertInst(allocaValue, true);
+                auto store = StoreInst::create(paramArgs[idx], allocaValue);
+                insertInst(store);
                 sym = std::make_shared<IntSymbol>(
                     param->ident->content, allocaValue, param->lineno);
             } else {
-                auto elementTy = context->getIntegerTy();
-                auto allocaValue = AllocaInst::create(context->getArrayTy(elementTy));
                 sym = std::make_shared<IntArraySymbol>(
-                    param->ident->content, allocaValue, param->lineno);
+                    param->ident->content, paramArgs[idx], param->lineno);
             }
             cur_scope_->addSymbol(sym);
         }
@@ -611,6 +904,15 @@ FunctionPtr Visitor::visitFuncDef(const FuncDef &funcDef) {
     visitBlock(*funcDef.block, true);
 
     cur_scope_ = cur_scope_->popScope();
+
+    ir_module_.addFunction(funcValue);
+
+    if (cur_block_ != nullptr && funcDef.funcType->kind == FuncType::VOID) {
+        insertInst(ReturnInst::create());
+    }
+    cur_block_ = nullptr;
+    entry_block_ = nullptr;
+    return funcValue;
 }
 
 FunctionPtr Visitor::visitMainFuncDef(const MainFuncDef &mainFunc) {
@@ -620,21 +922,37 @@ FunctionPtr Visitor::visitMainFuncDef(const MainFuncDef &mainFunc) {
         {}
     );
     cur_scope_ = cur_scope_->pushScope();
+    entry_block_ = BasicBlock::create(cur_func_);
+    entry_block_->setName("main.entry");
+    cur_block_ = entry_block_;
     visitBlock(*mainFunc.block, true);
     cur_scope_ = cur_scope_->popScope();
+    if (cur_block_ != nullptr) {
+        insertInst(ReturnInst::create(makeConst(ir_module_.getContext(), 0)));
+    }
+    ir_module_.addFunction(cur_func_);
+    entry_block_ = nullptr;
+    cur_block_ = nullptr;
     return cur_func_;
 }
 
 void Visitor::visit(const CompUnit &compUnit) {
     auto context = ir_module_.getContext();
-    auto builtinFuncValue = Function::create(
-        context->getIntegerTy(),
-        "getint",
-        {}
-    );
-    auto builtinSymbol = std::make_shared<IntFuncSymbol>(
-        "getint", builtinFuncValue, std::vector<TypePtr>{}, -1);
-    cur_scope_->addSymbol(builtinSymbol);
+    auto addBuiltin = [&](const std::string &name, TypePtr ret, const std::vector<TypePtr> &params) {
+        std::vector<ArgumentPtr> args;
+        for (size_t i = 0; i < params.size(); ++i) {
+            args.push_back(Argument::Create(params[i], name + ".arg" + std::to_string(i)));
+        }
+        auto func = Function::create(ret, name, args);
+        cur_scope_->addSymbol(std::make_shared<FuncSymbol>(
+            ret->is(Type::VoidTyID) ? VOID_FUNC : INT_FUNC, name, func, params, -1));
+        return func;
+    };
+
+    addBuiltin("getint", context->getIntegerTy(), {});
+    addBuiltin("putint", context->getVoidTy(), {context->getIntegerTy()});
+    addBuiltin("putch", context->getVoidTy(), {context->getIntegerTy()});
+    addBuiltin("putstr", context->getVoidTy(), {context->getArrayTy(context->getIntegerTy())});
 
     for (const auto &var_decl: compUnit.decls) {
         visitDecl(*var_decl);
@@ -646,6 +964,4 @@ void Visitor::visit(const CompUnit &compUnit) {
 
     const auto mainFuncPtr = visitMainFuncDef(*compUnit.main_func);
     ir_module_.setMainFunction(mainFuncPtr);
-
-    cur_scope_->printAllScopes();
 }

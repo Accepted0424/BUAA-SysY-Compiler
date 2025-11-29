@@ -14,6 +14,8 @@ public:
     ConstantArray(TypePtr type, const std::vector<std::shared_ptr<ConstantInt>> &elements)
         : ConstantData(ValueType::ConstantArrayTy, type), elements_(elements) {}
 
+    const std::vector<std::shared_ptr<ConstantInt>> &getElements() const { return elements_; }
+
 private:
     std::vector<std::shared_ptr<ConstantInt>> elements_;
 };

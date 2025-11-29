@@ -34,6 +34,10 @@ public:
         return functions_.end();
     }
 
+    void addFunction(FunctionPtr func) {
+        functions_.push_back(func);
+    }
+
     void addGlobalVar(GlobalValuePtr globalVar) {
         global_vars_.push_back(globalVar);
     }

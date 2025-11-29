@@ -15,7 +15,11 @@ public:
 
 protected:
     UnaryInstruction(ValueType valueType, TypePtr type, ValuePtr operand)
-        : Instruction(valueType, type) {};
+        : Instruction(valueType, type), operand_(std::move(operand)) {
+        addOperand(operand_);
+    };
+
+    ValuePtr operand_;
 };
 
 enum class UnaryOpType { NOT, NEG, POS };
@@ -33,6 +37,7 @@ public:
         return std::make_shared<UnaryOperator>(type, operand, opType);
     }
 
+    ValuePtr getOperand() const { return operand_; }
     UnaryOpType OpType() const { return op_type_; }
 
 private:

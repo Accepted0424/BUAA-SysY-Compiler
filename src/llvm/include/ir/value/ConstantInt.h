@@ -12,6 +12,8 @@ public:
     ConstantInt(const TypePtr &type, const int value)
         : ConstantData(ValueType::ConstantIntTy, type), value_(value) {}
 
+    int getValue() const { return value_; }
+
 private:
     int value_;
 };

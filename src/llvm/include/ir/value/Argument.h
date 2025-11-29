@@ -8,7 +8,9 @@ public:
     ~Argument() override = default;
 
     Argument(const TypePtr &type, const std::string &name):
-        Value(ValueType::ArgumentTy, type), name_(name) {}
+        Value(ValueType::ArgumentTy, type), name_(name) {
+        setName(name);
+    }
 
     static ArgumentPtr Create(TypePtr type, const std::string &name) {
         return std::make_shared<Argument>(type, name);

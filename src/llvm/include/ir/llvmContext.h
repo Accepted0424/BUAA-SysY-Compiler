@@ -1,6 +1,8 @@
 #pragma once
 
 #include <unordered_map>
+#include <functional>
+#include <utility>
 
 #include "IrForward.h"
 #include "type.h"
@@ -29,12 +31,14 @@ public:
         return int_ty_;
     }
 
-    TypePtr getArrayTy(TypePtr elementTy) {
-        if (arrayTypes_.find(elementTy->typeId_) != arrayTypes_.end()) {
-            return arrayTypes_[elementTy->typeId_];
+    TypePtr getArrayTy(TypePtr elementTy, int elementNum = -1) {
+        const auto key = std::make_pair(elementTy.get(), elementNum);
+        auto it = arrayTypes_.find(key);
+        if (it != arrayTypes_.end()) {
+            return it->second;
         }
-        auto arrayType = std::make_shared<ArrayType>(elementTy);
-        arrayTypes_[elementTy->typeId_] = arrayType;
+        auto arrayType = std::make_shared<ArrayType>(elementTy, elementNum);
+        arrayTypes_[key] = arrayType;
         return arrayType;
     }
 
@@ -43,11 +47,17 @@ public:
     }
 
 private:
+    struct ArrayTypeKeyHash {
+        size_t operator()(const std::pair<Type*, int> &key) const {
+            return std::hash<Type*>()(key.first) ^ (std::hash<int>()(key.second) << 1);
+        }
+    };
+
     // LlvmContext own all types.
     std::shared_ptr<IntegerType> int_ty_;
     std::shared_ptr<VoidType> void_ty_;
 
-    std::unordered_map<Type::TypeID, TypePtr> arrayTypes_;
+    std::unordered_map<std::pair<Type*, int>, TypePtr, ArrayTypeKeyHash> arrayTypes_;
 
     std::unordered_map<int, Constant*> intConstants_;
 

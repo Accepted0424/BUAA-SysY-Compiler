@@ -1,9 +1,11 @@
 #pragma once
 
 #include "llvm/include/ir/value/Value.h"
+#include "llvm/include/ir/IrForward.h"
 #include <list>
+#include <memory>
 
-class BasicBlock : public Value {
+class BasicBlock : public Value, public std::enable_shared_from_this<BasicBlock> {
 public:
     ~BasicBlock() override = default;
 
@@ -11,7 +13,7 @@ public:
         return type == ValueType::BasicBlockTy;
     }
 
-    static BasicBlockPtr New(FunctionPtr parent = nullptr);
+    static BasicBlockPtr create(FunctionPtr parent = nullptr);
 
     using instruction_iterator = std::list<InstructionPtr>::iterator;
 
@@ -39,6 +41,8 @@ public:
 
 private:
     BasicBlock(FunctionPtr parent);
+
+    FunctionPtr parent_;
 
     std::list<InstructionPtr> instructions_;
 };

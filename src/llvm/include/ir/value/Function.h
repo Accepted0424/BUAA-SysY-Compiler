@@ -4,6 +4,7 @@
 #include "BasicBlock.h"
 
 #include <list>
+#include <vector>
 
 class Function final : public GlobalValue {
 public:
@@ -15,7 +16,9 @@ public:
     Function(const TypePtr &type, const std::string &name, const std::vector<ArgumentPtr> &args)
         : GlobalValue(ValueType::FunctionTy, type, name), returnType_(type), args_(args) {}
 
-    static FunctionPtr create(TypePtr returnType, const std::string &name);
+    static FunctionPtr create(TypePtr returnType, const std::string &name) {
+        return std::make_shared<Function>(returnType, name);
+    }
 
     static FunctionPtr create(TypePtr returnType, const std::string &name, std::vector<ArgumentPtr> args) {
         return std::make_shared<Function>(returnType, name, args);
@@ -29,6 +32,21 @@ public:
 
     std::list<BasicBlockPtr>::iterator basicBlockEnd() {
         return basicBlocks_.end();
+    }
+
+    void addBasicBlock(BasicBlockPtr bb) {
+        basicBlocks_.push_back(std::move(bb));
+    }
+
+    BasicBlockPtr getEntryBlock() {
+        if (basicBlocks_.empty()) {
+            return nullptr;
+        }
+        return basicBlocks_.front();
+    }
+
+    const std::vector<ArgumentPtr> &getArgs() const {
+        return args_;
     }
 
 private:

@@ -2,6 +2,7 @@
 
 #include <string>
 #include <utility>
+#include "llvm/include/ir/IrForward.h"
 
 enum class ValueType {
     // Value
@@ -52,7 +53,7 @@ public:
         return name_;
     }
 
-    void SetName(const std::string &name) {
+    void setName(const std::string &name) {
         name_ = name;
     }
 
