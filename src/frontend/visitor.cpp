@@ -1,6 +1,7 @@
 #include "visitor.h"
 
 #include <functional>
+#include <optional>
 
 #include "logger.h"
 #include "llvm/include/ir/IrForward.h"
@@ -16,6 +17,71 @@
 namespace {
 ConstantIntPtr makeConst(LlvmContext* ctx, int value) {
     return ConstantInt::create(ctx->getIntegerTy(), value);
+}
+
+// Try to evaluate an expression to a constant integer; returns std::nullopt if not fully constant.
+std::optional<int> evalConstPrimary(const PrimaryExp &p);
+std::optional<int> evalConstUnary(const UnaryExp &u);
+std::optional<int> evalConstMul(const MulExp &m);
+std::optional<int> evalConstAdd(const AddExp &a);
+
+std::optional<int> evalConstPrimary(const PrimaryExp &p) {
+    switch (p.kind) {
+        case PrimaryExp::NUMBER:
+            return std::stoi(p.number->value);
+        case PrimaryExp::EXP:
+            return evalConstAdd(*p.exp->addExp);
+        case PrimaryExp::LVAL:
+        default:
+            return std::nullopt;
+    }
+}
+
+std::optional<int> evalConstUnary(const UnaryExp &u) {
+    if (u.kind == UnaryExp::PRIMARY) {
+        return evalConstPrimary(*u.primary);
+    }
+    if (u.kind == UnaryExp::UNARY_OP) {
+        auto val = evalConstUnary(*u.unary->expr);
+        if (!val.has_value()) return std::nullopt;
+        switch (u.unary->op->kind) {
+            case UnaryOp::PLUS: return *val;
+            case UnaryOp::MINU: return -*val;
+            case UnaryOp::NOT: return !*val;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<int> evalConstMul(const MulExp &m) {
+    auto res = evalConstUnary(*m.first);
+    if (!res.has_value()) return std::nullopt;
+    for (const auto &[op, rhs] : m.rest) {
+        auto rhsVal = evalConstUnary(*rhs);
+        if (!rhsVal.has_value()) return std::nullopt;
+        switch (op) {
+            case MulExp::MULT: res = *res * *rhsVal; break;
+            case MulExp::DIV: res = *res / *rhsVal; break;
+            case MulExp::MOD: res = *res % *rhsVal; break;
+        }
+    }
+    return res;
+}
+
+std::optional<int> evalConstAdd(const AddExp &a) {
+    auto res = evalConstMul(*a.first);
+    if (!res.has_value()) return std::nullopt;
+    for (const auto &[op, rhs] : a.rest) {
+        auto rhsVal = evalConstMul(*rhs);
+        if (!rhsVal.has_value()) return std::nullopt;
+        if (op == AddExp::PLUS) res = *res + *rhsVal;
+        else res = *res - *rhsVal;
+    }
+    return res;
+}
+
+std::optional<int> evalConstExp(const Exp &exp) {
+    return evalConstAdd(*exp.addExp);
 }
 }
 
@@ -108,6 +174,109 @@ ValuePtr Visitor::createCmp(CompareOpType op, ValuePtr lhs, ValuePtr rhs) {
     auto cmp = CompareOperator::create(op, lhs, rhs);
     insertInst(cmp);
     return cmp;
+}
+
+std::optional<int> Visitor::constValueOfLVal(const LVal &lval) {
+    if (!cur_scope_ || !cur_scope_->existInSymTable(lval.ident->content)) {
+        return std::nullopt;
+    }
+    auto sym = cur_scope_->getSymbol(lval.ident->content);
+    if (sym->type != CONST_INT && sym->type != CONST_INT_ARRAY) {
+        return std::nullopt;
+    }
+    if (sym->type == CONST_INT) {
+        if (auto ci = std::dynamic_pointer_cast<ConstantInt>(sym->value)) {
+            return ci->getValue();
+        }
+        if (auto gv = std::dynamic_pointer_cast<GlobalVariable>(sym->value)) {
+            auto gvVal = std::dynamic_pointer_cast<ConstantInt>(gv->value_);
+            if (gvVal) {
+                return gvVal->getValue();
+            }
+        }
+        return std::nullopt;
+    }
+
+    // CONST_INT_ARRAY
+    if (lval.index == nullptr) {
+        return std::nullopt;
+    }
+    auto idxVal = evalConstExpValue(*lval.index);
+    if (!idxVal.has_value() || *idxVal < 0) {
+        return std::nullopt;
+    }
+    if (auto gv = std::dynamic_pointer_cast<GlobalVariable>(sym->value)) {
+        auto constArr = std::dynamic_pointer_cast<ConstantArray>(gv->value_);
+        if (constArr) {
+            const auto &elems = constArr->getElements();
+            if (*idxVal < static_cast<int>(elems.size())) {
+                return elems[*idxVal]->getValue();
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<int> Visitor::evalConstExpValue(const Exp &exp) {
+    std::function<std::optional<int>(const AddExp&)> evalAdd;
+    std::function<std::optional<int>(const MulExp&)> evalMul;
+    std::function<std::optional<int>(const UnaryExp&)> evalUnary;
+    std::function<std::optional<int>(const PrimaryExp&)> evalPrimary;
+
+    evalPrimary = [&](const PrimaryExp &p) -> std::optional<int> {
+        switch (p.kind) {
+            case PrimaryExp::NUMBER:
+                return std::stoi(p.number->value);
+            case PrimaryExp::EXP:
+                return evalAdd(*p.exp->addExp);
+            case PrimaryExp::LVAL:
+            default:
+                return p.lval ? constValueOfLVal(*p.lval) : std::nullopt;
+        }
+    };
+
+    evalUnary = [&](const UnaryExp &u) -> std::optional<int> {
+        if (u.kind == UnaryExp::PRIMARY) return evalPrimary(*u.primary);
+        if (u.kind == UnaryExp::UNARY_OP) {
+            auto val = evalUnary(*u.unary->expr);
+            if (!val.has_value()) return std::nullopt;
+            switch (u.unary->op->kind) {
+                case UnaryOp::PLUS: return *val;
+                case UnaryOp::MINU: return -*val;
+                case UnaryOp::NOT: return !*val;
+            }
+        }
+        return std::nullopt;
+    };
+
+    evalMul = [&](const MulExp &m) -> std::optional<int> {
+        auto res = evalUnary(*m.first);
+        if (!res.has_value()) return std::nullopt;
+        for (const auto &[op, rhs] : m.rest) {
+            auto rhsVal = evalUnary(*rhs);
+            if (!rhsVal.has_value()) return std::nullopt;
+            switch (op) {
+                case MulExp::MULT: res = *res * *rhsVal; break;
+                case MulExp::DIV: res = *res / *rhsVal; break;
+                case MulExp::MOD: res = *res % *rhsVal; break;
+            }
+        }
+        return res;
+    };
+
+    evalAdd = [&](const AddExp &a) -> std::optional<int> {
+        auto res = evalMul(*a.first);
+        if (!res.has_value()) return std::nullopt;
+        for (const auto &[op, rhs] : a.rest) {
+            auto rhsVal = evalMul(*rhs);
+            if (!rhsVal.has_value()) return std::nullopt;
+            if (op == AddExp::PLUS) res = *res + *rhsVal;
+            else res = *res - *rhsVal;
+        }
+        return res;
+    };
+
+    return evalAdd(*exp.addExp);
 }
 
 ValuePtr Visitor::getLValAddress(const LVal &lval) {
@@ -430,9 +599,15 @@ void Visitor::visitVarDecl(const VarDecl &varDecl) {
     for (const auto &varDef: varDecl.varDefs) {
         const std::string &name = varDef->ident->content;
         const int lineno = varDef->lineno;
+        if (cur_scope_->existInScope(name)) {
+            ErrorReporter::error(lineno, ERR_REDEFINED_NAME);
+            continue;
+        }
         std::shared_ptr<Symbol> symbol = nullptr;
         const bool isArray = (varDef->constExp != nullptr);
         const int arraySize = isArray && varDef->constExp ? visitConstExp(*varDef->constExp)->getValue() : 0;
+        const bool isStaticLocal = isStatic && !cur_scope_->isGlobalScope();
+        const std::string storageName = isStaticLocal ? (cur_func_->getName() + ".static." + name) : name;
 
         if (isStatic || cur_scope_->isGlobalScope()) {
             if (isArray) {
@@ -442,6 +617,11 @@ void Visitor::visitVarDecl(const VarDecl &varDecl) {
                     for (const auto &exp : varDef->initVal->list) {
                         auto val = visitExp(*exp);
                         auto ci = std::dynamic_pointer_cast<ConstantInt>(val);
+                        if (!ci) {
+                            if (auto evaluated = evalConstExpValue(*exp)) {
+                                ci = makeConst(context, *evaluated);
+                            }
+                        }
                         if (ci) {
                             initList.push_back(ci);
                         }
@@ -454,7 +634,7 @@ void Visitor::visitVarDecl(const VarDecl &varDecl) {
                     initList.push_back(makeConst(context, 0));
                 }
                 auto initVal = ConstantArray::create(type, initList);
-                auto gv = GlobalVariable::create(type, name, initVal, false);
+                auto gv = GlobalVariable::create(type, storageName, initVal, false);
 
                 if (isStatic) {
                     symbol = std::make_shared<StaticIntArraySymbol>(name, gv, lineno);
@@ -466,9 +646,18 @@ void Visitor::visitVarDecl(const VarDecl &varDecl) {
             } else {
                 ValuePtr initVal = nullptr;
                 if (varDef->initVal && varDef->initVal->kind == InitVal::EXP) {
-                    initVal = visitExp(*varDef->initVal->exp);
+                    auto val = visitExp(*varDef->initVal->exp);
+                    auto ci = std::dynamic_pointer_cast<ConstantInt>(val);
+                    if (!ci) {
+                        if (auto evaluated = evalConstExpValue(*varDef->initVal->exp)) {
+                            ci = makeConst(context, *evaluated);
+                        }
+                    }
+                    if (ci) {
+                        initVal = ci;
+                    }
                 }
-                auto gv = GlobalVariable::create(context->getIntegerTy(), name, initVal, false);
+                auto gv = GlobalVariable::create(context->getIntegerTy(), storageName, initVal, false);
 
                 if (isStatic) {
                     symbol = std::make_shared<StaticIntSymbol>(name, gv, lineno);

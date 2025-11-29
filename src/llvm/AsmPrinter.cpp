@@ -114,6 +114,8 @@ private:
     std::unordered_set<const Function*> printedFuncs_;
     int tempId_ = 0;
     int blockId_ = 0;
+    std::unordered_set<std::string> usedValueNames_;
+    std::unordered_set<std::string> usedBlockNames_;
 
     std::string nextTemp() {
         return "%t" + std::to_string(tempId_++);
@@ -121,6 +123,16 @@ private:
 
     std::string nextBlockName() {
         return "L" + std::to_string(blockId_++);
+    }
+
+    static std::string makeUnique(const std::string &base, std::unordered_set<std::string> &used) {
+        std::string candidate = base;
+        int suffix = 1;
+        while (used.count(candidate)) {
+            candidate = base + "." + std::to_string(suffix++);
+        }
+        used.insert(candidate);
+        return candidate;
     }
 
     std::string valueName(const ValuePtr &v) {
@@ -143,6 +155,7 @@ private:
             case ValueType::BasicBlockTy: {
                 auto hint = v->getName();
                 auto name = hint.empty() ? nextBlockName() : hint;
+                name = makeUnique(name, usedBlockNames_);
                 names_[ptr] = name;
                 return name;
             }
@@ -150,7 +163,8 @@ private:
                 break;
         }
 
-        auto name = v->getName().empty() ? nextTemp() : "%" + v->getName();
+        auto base = v->getName().empty() ? nextTemp() : "%" + v->getName();
+        auto name = makeUnique(base, usedValueNames_);
         names_[ptr] = name;
         return name;
     }

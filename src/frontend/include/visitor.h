@@ -53,6 +53,9 @@ private:
 
     ValuePtr createCmp(CompareOpType op, ValuePtr lhs, ValuePtr rhs);
 
+    std::optional<int> evalConstExpValue(const Exp &exp);
+    std::optional<int> constValueOfLVal(const LVal &lval);
+
     void insertInst(const InstructionPtr &inst, bool toEntry = false);
 
     BasicBlockPtr newBlock(const std::string &hint);
