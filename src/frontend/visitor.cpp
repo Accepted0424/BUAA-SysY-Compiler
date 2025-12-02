@@ -1024,10 +1024,16 @@ bool Visitor::visitStmt(const Stmt &stmt, bool isLast) {
             auto putchSym = cur_scope_->getFuncSymbol("putch");
             auto putintSym = cur_scope_->getFuncSymbol("putint");
 
+            std::vector<ValuePtr> evaluatedArgs;
+            evaluatedArgs.reserve(stmt.printfStmt.args.size());
+            for (const auto &arg : stmt.printfStmt.args) {
+                evaluatedArgs.push_back(loadIfPointer(visitExp(*arg)));
+            }
+
             size_t argIdx = 0;
             for (size_t i = 0; i < str.size(); ++i) {
                 if (str[i] == '%' && i + 1 < str.size() && str[i + 1] == 'd') {
-                    auto val = loadIfPointer(visitExp(*stmt.printfStmt.args[argIdx++]));
+                    auto val = evaluatedArgs[argIdx++];
                     auto call = CallInst::create(std::dynamic_pointer_cast<Function>(putintSym->value), {val});
                     insertInst(call);
                     ++i;
