@@ -408,63 +408,8 @@ ConstantIntPtr Visitor::visitConstExp(const ConstExp &constExp) {
     if (auto valOpt = evalConstConstExp(constExp)) {
         return ConstantInt::create(ir_module_.getContext()->getIntegerTy(), *valOpt);
     }
-    auto ctx = ir_module_.getContext();
-
-    std::function<int(const AddExp&)> evalAdd;
-    std::function<int(const MulExp&)> evalMul;
-    std::function<int(const UnaryExp&)> evalUnary;
-    std::function<int(const PrimaryExp&)> evalPrimary;
-
-    evalPrimary = [&](const PrimaryExp &p) -> int {
-        switch (p.kind) {
-            case PrimaryExp::NUMBER:
-                return std::stoi(p.number->value);
-            case PrimaryExp::EXP:
-                return evalAdd(*p.exp->addExp);
-            case PrimaryExp::LVAL:
-            default:
-                return 0;
-        }
-    };
-
-    evalUnary = [&](const UnaryExp &u) -> int {
-        if (u.kind == UnaryExp::PRIMARY) return evalPrimary(*u.primary);
-        if (u.kind == UnaryExp::UNARY_OP) {
-            auto val = evalUnary(*u.unary->expr);
-            switch (u.unary->op->kind) {
-                case UnaryOp::PLUS: return val;
-                case UnaryOp::MINU: return -val;
-                case UnaryOp::NOT: return !val;
-            }
-        }
-        return 0;
-    };
-
-    evalMul = [&](const MulExp &m) -> int {
-        int res = evalUnary(*m.first);
-        for (const auto &[op, rhs] : m.rest) {
-            int rhsVal = evalUnary(*rhs);
-            switch (op) {
-                case MulExp::MULT: res *= rhsVal; break;
-                case MulExp::DIV: res /= rhsVal; break;
-                case MulExp::MOD: res %= rhsVal; break;
-            }
-        }
-        return res;
-    };
-
-    evalAdd = [&](const AddExp &a) -> int {
-        int res = evalMul(*a.first);
-        for (const auto &[op, rhs] : a.rest) {
-            int rhsVal = evalMul(*rhs);
-            if (op == AddExp::PLUS) res += rhsVal;
-            else res -= rhsVal;
-        }
-        return res;
-    };
-
-    int val = evalAdd(*constExp.addExp);
-    return ConstantInt::create(ctx->getIntegerTy(), val);
+    LOG_ERROR("Unreachable in Visitor::visitConstExp");
+    return nullptr;
 }
 
 ValuePtr Visitor::visitExp(const Exp &exp) {
