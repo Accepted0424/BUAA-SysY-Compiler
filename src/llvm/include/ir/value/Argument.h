@@ -12,7 +12,7 @@ public:
         setName(name);
     }
 
-    static ArgumentPtr Create(TypePtr type, const std::string &name) {
+    static ArgumentPtr create(TypePtr type, const std::string &name) {
         return std::make_shared<Argument>(type, name);
     }
 

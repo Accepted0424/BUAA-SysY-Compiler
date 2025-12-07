@@ -97,7 +97,7 @@ private:
 
     void visitForStmt(const ForStmt &forStmt);
 
-    bool visitStmt(const Stmt &stmt, bool isLast);
+    bool visitStmt(const Stmt &stmt);
 
     bool visitBlockItem(const BlockItem &blockItem, bool isLast);
 

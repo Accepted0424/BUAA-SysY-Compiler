@@ -18,71 +18,6 @@ namespace {
 ConstantIntPtr makeConst(LlvmContext* ctx, int value) {
     return ConstantInt::create(ctx->getIntegerTy(), value);
 }
-
-// Try to evaluate an expression to a constant integer; returns std::nullopt if not fully constant.
-std::optional<int> evalConstPrimary(const PrimaryExp &p);
-std::optional<int> evalConstUnary(const UnaryExp &u);
-std::optional<int> evalConstMul(const MulExp &m);
-std::optional<int> evalConstAdd(const AddExp &a);
-
-std::optional<int> evalConstPrimary(const PrimaryExp &p) {
-    switch (p.kind) {
-        case PrimaryExp::NUMBER:
-            return std::stoi(p.number->value);
-        case PrimaryExp::EXP:
-            return evalConstAdd(*p.exp->addExp);
-        case PrimaryExp::LVAL:
-        default:
-            return std::nullopt;
-    }
-}
-
-std::optional<int> evalConstUnary(const UnaryExp &u) {
-    if (u.kind == UnaryExp::PRIMARY) {
-        return evalConstPrimary(*u.primary);
-    }
-    if (u.kind == UnaryExp::UNARY_OP) {
-        auto val = evalConstUnary(*u.unary->expr);
-        if (!val.has_value()) return std::nullopt;
-        switch (u.unary->op->kind) {
-            case UnaryOp::PLUS: return *val;
-            case UnaryOp::MINU: return -*val;
-            case UnaryOp::NOT: return !*val;
-        }
-    }
-    return std::nullopt;
-}
-
-std::optional<int> evalConstMul(const MulExp &m) {
-    auto res = evalConstUnary(*m.first);
-    if (!res.has_value()) return std::nullopt;
-    for (const auto &[op, rhs] : m.rest) {
-        auto rhsVal = evalConstUnary(*rhs);
-        if (!rhsVal.has_value()) return std::nullopt;
-        switch (op) {
-            case MulExp::MULT: res = *res * *rhsVal; break;
-            case MulExp::DIV: res = *res / *rhsVal; break;
-            case MulExp::MOD: res = *res % *rhsVal; break;
-        }
-    }
-    return res;
-}
-
-std::optional<int> evalConstAdd(const AddExp &a) {
-    auto res = evalConstMul(*a.first);
-    if (!res.has_value()) return std::nullopt;
-    for (const auto &[op, rhs] : a.rest) {
-        auto rhsVal = evalConstMul(*rhs);
-        if (!rhsVal.has_value()) return std::nullopt;
-        if (op == AddExp::PLUS) res = *res + *rhsVal;
-        else res = *res - *rhsVal;
-    }
-    return res;
-}
-
-std::optional<int> evalConstExp(const Exp &exp) {
-    return evalConstAdd(*exp.addExp);
-}
 }
 
 void Visitor::insertInst(const InstructionPtr &inst, bool toEntry) {
@@ -548,7 +483,7 @@ void Visitor::visitConstDecl(const ConstDecl &constDecl) {
             auto symbol = std::make_shared<ConstIntSymbol>(name, nullptr, lineno);
             if (constDef->constInitVal->kind == ConstInitVal::EXP) {
                 auto val = visitConstExp(*constDef->constInitVal->exp);
-                if (cur_func_ != nullptr) {
+                if (!cur_scope_->isGlobalScope()) {
                     // local
                     auto alloca = AllocaInst::create(context->getIntegerTy(), name);
                     insertInst(alloca, true);
@@ -579,7 +514,7 @@ void Visitor::visitConstDecl(const ConstDecl &constDecl) {
                 initialValList.push_back(makeConst(context, 0));
             }
 
-            if (cur_func_ != nullptr) {
+            if (!cur_scope_->isGlobalScope()) {
                 // local
                 auto alloca = AllocaInst::create(arrayType, name);
                 insertInst(alloca, true);
@@ -879,7 +814,7 @@ void Visitor::visitForStmt(const ForStmt &forStmt) {
     }
 }
 
-bool Visitor::visitStmt(const Stmt &stmt, bool isLast) {
+bool Visitor::visitStmt(const Stmt &stmt) {
     bool hasReturn = false;
 
     switch (stmt.kind) {
@@ -917,14 +852,14 @@ bool Visitor::visitStmt(const Stmt &stmt, bool isLast) {
                 insertInst(BranchInst::create(condVal, thenBB, elseBB));
 
                 cur_block_ = thenBB;
-                bool thenReturn = visitStmt(*stmt.ifStmt.thenStmt, false);
+                bool thenReturn = visitStmt(*stmt.ifStmt.thenStmt);
                 if (!thenReturn && cur_block_ != nullptr) {
                     insertInst(JumpInst::create(endBB));
                 }
 
                 if (stmt.ifStmt.elseStmt != nullptr) {
                     cur_block_ = elseBB;
-                    bool elseReturn = visitStmt(*stmt.ifStmt.elseStmt, false);
+                    bool elseReturn = visitStmt(*stmt.ifStmt.elseStmt);
                     if (!elseReturn && cur_block_ != nullptr) {
                         insertInst(JumpInst::create(endBB));
                     }
@@ -954,7 +889,7 @@ bool Visitor::visitStmt(const Stmt &stmt, bool isLast) {
                 continueTargets_.push_back(stepBB);
 
                 cur_block_ = bodyBB;
-                visitStmt(*stmt.forStmt.stmt, false);
+                visitStmt(*stmt.forStmt.stmt);
                 if (cur_block_ != nullptr) {
                     insertInst(JumpInst::create(stepBB));
                 }
@@ -1060,7 +995,7 @@ bool Visitor::visitBlockItem(const BlockItem &blockItem, bool isLast) {
             visitDecl(*blockItem.decl);
             break;
         case BlockItem::STMT:
-            hasReturn = visitStmt(*blockItem.stmt, isLast);
+            hasReturn = visitStmt(*blockItem.stmt);
             break;
         default:
             LOG_ERROR("Unreachable in Visitor::visitBlockItem");
@@ -1100,12 +1035,12 @@ FunctionPtr Visitor::visitFuncDef(const FuncDef &funcDef) {
         for (const auto &param: funcDef.funcFParams->params) {
             // Btype is always 'int'
             if (!param->isArray) {
-                auto arg = Argument::Create(context->getIntegerTy(), param->ident->content);
+                auto arg = Argument::create(context->getIntegerTy(), param->ident->content);
                 paramArgs.push_back(arg);
                 paramTypes.push_back(context->getIntegerTy());
             } else {
                 auto elementTy = context->getIntegerTy();
-                auto arg = Argument::Create(context->getArrayTy(elementTy), param->ident->content);
+                auto arg = Argument::create(context->getArrayTy(elementTy), param->ident->content);
                 paramArgs.push_back(arg);
                 paramTypes.push_back(context->getArrayTy(elementTy));
             }
@@ -1200,7 +1135,7 @@ void Visitor::visit(const CompUnit &compUnit) {
     auto addBuiltin = [&](const std::string &name, TypePtr ret, const std::vector<TypePtr> &params) {
         std::vector<ArgumentPtr> args;
         for (size_t i = 0; i < params.size(); ++i) {
-            args.push_back(Argument::Create(params[i], name + ".arg" + std::to_string(i)));
+            args.push_back(Argument::create(params[i], name + ".arg" + std::to_string(i)));
         }
         auto func = Function::create(ret, name, args);
         cur_scope_->addSymbol(std::make_shared<FuncSymbol>(
