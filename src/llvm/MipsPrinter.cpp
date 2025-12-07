@@ -54,6 +54,14 @@ int typeSize(const TypePtr &type) {
     return 4;
 }
 
+int elementStride(const TypePtr &type) {
+    if (type && type->is(Type::ArrayTyID)) {
+        auto arr = std::static_pointer_cast<ArrayType>(type);
+        return typeSize(arr->getElementType());
+    }
+    return typeSize(type);
+}
+
 bool needsValueSlot(const ValueType vt) {
     switch (vt) {
         case ValueType::BinaryOperatorTy:
@@ -269,7 +277,7 @@ private:
         FrameInfo frame = buildFrameInfo(func, funcName);
         const std::string retLabel = funcName + "_ret";
 
-        out_ << "\n.globl " << funcName << "\n" << funcName << ":\n";
+        out_ << "\n" << funcName << ":\n";
         out_ << "  addi $sp, $sp, -" << frame.frameSize << "\n";
         out_ << "  sw $ra, " << frame.frameSize - 4 << "($sp)\n";
         out_ << "  sw $fp, " << frame.frameSize - 8 << "($sp)\n";
@@ -575,13 +583,30 @@ private:
         loadAddress(inst->getAddressOperand(), frame, "$t0");
         int immOffset = 0;
         bool hasRegOffset = false;
+        TypePtr curType = inst->getAddressOperand() ? inst->getAddressOperand()->getType() : nullptr;
+
         for (const auto &idx : inst->getIndices()) {
+            const int stride = elementStride(curType);
             if (idx->getValueType() == ValueType::ConstantIntTy) {
                 auto ci = std::static_pointer_cast<ConstantInt>(idx);
-                immOffset += ci->getValue() * 4;
+                immOffset += ci->getValue() * stride;
             } else {
                 loadValue(idx, frame, "$t1");
-                out_ << "  sll $t1, $t1, 2\n";
+                if (stride == 1) {
+                    out_ << "  move $t1, $t1\n";
+                } else if ((stride & (stride - 1)) == 0) {
+                    int shift = 0;
+                    int s = stride;
+                    while (s > 1) {
+                        ++shift;
+                        s >>= 1;
+                    }
+                    out_ << "  sll $t1, $t1, " << shift << "\n";
+                } else {
+                    out_ << "  li $t3, " << stride << "\n";
+                    out_ << "  mul $t1, $t1, $t3\n";
+                }
+
                 if (!hasRegOffset) {
                     out_ << "  move $t2, $t1\n";
                     hasRegOffset = true;
@@ -589,7 +614,12 @@ private:
                     out_ << "  addu $t2, $t2, $t1\n";
                 }
             }
+
+            if (curType && curType->is(Type::ArrayTyID)) {
+                curType = std::static_pointer_cast<ArrayType>(curType)->getElementType();
+            }
         }
+
         if (immOffset != 0) {
             out_ << "  addi $t0, $t0, " << immOffset << "\n";
         }
