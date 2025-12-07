@@ -7,6 +7,7 @@
 #include "parser.h"
 #include "visitor.h"
 #include "llvm/include/asm/AsmPrinter.h"
+#include "llvm/include/asm/MipsPrinter.h"
 #include "llvm/include/ir/llvmContext.h"
 #include "llvm/include/ir/module.h"
 
@@ -47,7 +48,7 @@ void semanticAnalyse(std::ifstream& file, std::ofstream& out) {
 }
 
 // homework 5
-void generateCode(std::ifstream& file, std::ofstream& out) {
+void generateCode(std::ifstream& file, std::ofstream& irOut, std::ofstream& mipsOut) {
     Lexer lexer(file);
     Parser parser(lexer);
     auto root = parser.parse();
@@ -58,13 +59,17 @@ void generateCode(std::ifstream& file, std::ofstream& out) {
     auto visitor = Visitor(module);
     visitor.visit(*root);
 
-    const AsmPrinter printer(module, out);
-    printer.print();
+    const AsmPrinter irPrinter(module, irOut);
+    irPrinter.print();
+
+    const MipsPrinter mipsPrinter(module, mipsOut);
+    mipsPrinter.print();
 }
 
 int main(int argc, char *argv[]) {
     std::ifstream infile("testfile.txt", std::ios::in);
     std::ofstream outfile("llvm_ir.txt", std::ios::out);
+    std::ofstream mipsfile("mips.txt", std::ios::out);
     std::ofstream errorfile("error.txt", std::ios::out);
 
     Logger::instance().setLevel(LogLevel::RELEASE);
@@ -72,7 +77,7 @@ int main(int argc, char *argv[]) {
     // lex(infile, outfile);
     // parse(infile, outfile);
     // semanticAnalyse(infile, outfile);
-    generateCode(infile, outfile);
+    generateCode(infile, outfile, mipsfile);
 
     ErrorReporter::get().dump(errorfile);
 
