@@ -88,17 +88,12 @@ public:
     void print() {
         emitData();
         out_ << "\n.text\n";
-        emitBuiltins();
 
         auto mainFunc = module_.getMainFunction();
         if (mainFunc) {
-            const std::string mainName = sanitizeName(mainFunc->getName());
-            out_ << "\n.globl _start\n"
-                 << "_start:\n"
-                 << "  jal " << mainName << "\n"
-                 << "  li $v0, 10\n"
-                 << "  syscall\n";
+            emitStartStub(mainFunc->getName());
         }
+        emitBuiltins();
 
         std::unordered_set<const Function*> printed;
         for (auto it = module_.functionBegin(); it != module_.functionEnd(); ++it) {
@@ -113,6 +108,10 @@ public:
 private:
     Module &module_;
     std::ostream &out_;
+
+    void emitNop() {
+        out_ << "  nop\n";
+    }
 
     void emitData() {
         out_ << ".data\n";
@@ -153,6 +152,16 @@ private:
         emitPutstr();
     }
 
+    void emitStartStub(const std::string &mainNameRaw) {
+        const std::string mainName = sanitizeName(mainNameRaw);
+        out_ << "\n.globl _start\n"
+             << "_start:\n"
+             << "  jal " << mainName << "\n"
+             << "  nop\n"
+             << "  li $v0, 10\n"
+             << "  syscall\n";
+    }
+
     void emitBuiltinPrologue(const std::string &name, int frameSize = 8) {
         out_ << "\n.globl " << name << "\n" << name << ":\n";
         out_ << "  addi $sp, $sp, -" << frameSize << "\n";
@@ -166,6 +175,7 @@ private:
         out_ << "  lw $fp, " << frameSize - 8 << "($sp)\n";
         out_ << "  addi $sp, $sp, " << frameSize << "\n";
         out_ << "  jr $ra\n";
+        emitNop();
     }
 
     void emitGetint() {
@@ -278,6 +288,7 @@ private:
         out_ << "  lw $fp, " << frame.frameSize - 8 << "($sp)\n";
         out_ << "  addi $sp, $sp, " << frame.frameSize << "\n";
         out_ << "  jr $ra\n";
+        emitNop();
     }
 
     void emitInstruction(const InstructionPtr &inst, const FrameInfo &frame, const std::string &retLabel) {
@@ -550,6 +561,7 @@ private:
             out_ << "  sw $t0, 0($sp)\n";
         }
         out_ << "  jal " << funcName << "\n";
+        emitNop();
         if (!args.empty()) {
             out_ << "  addi $sp, $sp, " << static_cast<int>(args.size()) * 4 << "\n";
         }
@@ -592,11 +604,13 @@ private:
             loadValue(inst->getReturnValue(), frame, "$v0");
         }
         out_ << "  j " << retLabel << "\n";
+        emitNop();
     }
 
     void emitJump(const std::shared_ptr<JumpInst> &inst, const FrameInfo &frame) {
         auto target = inst->getTarget();
         out_ << "  j " << frame.blockLabels.at(target.get()) << "\n";
+        emitNop();
     }
 
     void emitBranch(const std::shared_ptr<BranchInst> &inst, const FrameInfo &frame) {
@@ -604,7 +618,9 @@ private:
         auto tLabel = frame.blockLabels.at(inst->getTrueBlock().get());
         auto fLabel = frame.blockLabels.at(inst->getFalseBlock().get());
         out_ << "  bne $t0, $zero, " << tLabel << "\n";
+        emitNop();
         out_ << "  j " << fLabel << "\n";
+        emitNop();
     }
 };
 
