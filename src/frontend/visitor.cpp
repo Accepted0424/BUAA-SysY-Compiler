@@ -429,12 +429,8 @@ void Visitor::visitConstDecl(const ConstDecl &constDecl) {
             if (constDef->constInitVal->kind == ConstInitVal::EXP) {
                 auto val = visitConstExp(*constDef->constInitVal->exp);
                 if (!cur_scope_->isGlobalScope()) {
-                    // local
-                    auto alloca = AllocaInst::create(context->getIntegerTy(), name);
-                    insertInst(alloca, true);
-                    auto store = StoreInst::create(val, alloca);
-                    insertInst(store);
-                    symbol->value = alloca;
+                    // local: keep as immediate constant
+                    symbol->value = val;
                 } else {
                     // global
                     auto globalVar = GlobalVariable::create(context->getIntegerTy(), name, val, true);
