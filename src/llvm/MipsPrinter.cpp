@@ -468,10 +468,10 @@ private:
         loadValue(inst->rhs_, frame, "$t1");
         switch (inst->OpType()) {
             case BinaryOpType::ADD:
-                out_ << "  add $t2, $t0, $t1\n";
+                out_ << "  addu $t2, $t0, $t1\n";
                 break;
             case BinaryOpType::SUB:
-                out_ << "  sub $t2, $t0, $t1\n";
+                out_ << "  subu $t2, $t0, $t1\n";
                 break;
             case BinaryOpType::MUL:
                 out_ << "  mul $t2, $t0, $t1\n";
@@ -544,7 +544,7 @@ private:
                 out_ << "  move $t2, $t0\n";
                 break;
             case UnaryOpType::NEG:
-                out_ << "  sub $t2, $zero, $t0\n";
+                out_ << "  subu $t2, $zero, $t0\n";
                 break;
             case UnaryOpType::NOT:
                 out_ << "  sltiu $t2, $t0, 1\n";
