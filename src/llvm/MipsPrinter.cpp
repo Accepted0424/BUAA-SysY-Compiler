@@ -403,7 +403,8 @@ private:
                     info.allocaOffsets[inst.get()] = -nextOffset;
                     continue;
                 }
-                if (needsValueSlot(inst->getValueType())) {
+                const bool pinned = plan.valueRegs.count(inst.get()) > 0;
+                if (needsValueSlot(inst->getValueType()) && !pinned) {
                     nextOffset += 4;
                     info.valueOffsets[inst.get()] = -nextOffset;
                 }

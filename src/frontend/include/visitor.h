@@ -62,6 +62,7 @@ private:
     std::optional<int> constValueOfLVal(const LVal &lval);
 
     void insertInst(const InstructionPtr &inst, bool toEntry = false);
+    void runDCE(const FunctionPtr &func);
 
     BasicBlockPtr newBlock(const std::string &hint);
 

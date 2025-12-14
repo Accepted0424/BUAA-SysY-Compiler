@@ -3,7 +3,9 @@
 #include <functional>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include "logger.h"
 #include "llvm/include/ir/IrForward.h"
@@ -35,6 +37,85 @@ bool isCommutative(const BinaryOpType op) {
 
 bool isCommutative(const CompareOpType op) {
     return op == CompareOpType::EQL || op == CompareOpType::NEQ;
+}
+
+bool isRemovable(const InstructionPtr &inst) {
+    switch (inst->getValueType()) {
+        case ValueType::AllocaInstTy:
+        case ValueType::BinaryOperatorTy:
+        case ValueType::CompareInstTy:
+        case ValueType::LogicalInstTy:
+        case ValueType::ZExtInstTy:
+        case ValueType::UnaryOperatorTy:
+        case ValueType::GetElementPtrInstTy:
+        case ValueType::LoadInstTy:
+            return true;
+        default:
+            return false;
+    }
+}
+
+void collectOperands(const InstructionPtr &inst, std::vector<ValuePtr> &ops) {
+    switch (inst->getValueType()) {
+        case ValueType::BinaryOperatorTy:
+        case ValueType::CompareInstTy:
+        case ValueType::LogicalInstTy: {
+            auto bin = std::static_pointer_cast<BinaryInstruction>(inst);
+            ops.push_back(bin->lhs_);
+            ops.push_back(bin->rhs_);
+            break;
+        }
+        case ValueType::ZExtInstTy: {
+            auto zext = std::static_pointer_cast<ZExtInst>(inst);
+            ops.push_back(zext->getOperand());
+            break;
+        }
+        case ValueType::UnaryOperatorTy: {
+            auto un = std::static_pointer_cast<UnaryOperator>(inst);
+            ops.push_back(un->getOperand());
+            break;
+        }
+        case ValueType::GetElementPtrInstTy: {
+            auto gep = std::static_pointer_cast<GetElementPtrInst>(inst);
+            ops.push_back(gep->getAddressOperand());
+            for (const auto &idx : gep->getIndices()) {
+                ops.push_back(idx);
+            }
+            break;
+        }
+        case ValueType::LoadInstTy: {
+            auto ld = std::static_pointer_cast<LoadInst>(inst);
+            ops.push_back(ld->getAddressOperand());
+            break;
+        }
+        case ValueType::StoreInstTy: {
+            auto st = std::static_pointer_cast<StoreInst>(inst);
+            ops.push_back(st->getValueOperand());
+            ops.push_back(st->getAddressOperand());
+            break;
+        }
+        case ValueType::CallInstTy: {
+            auto call = std::static_pointer_cast<CallInst>(inst);
+            for (const auto &arg : call->getArgs()) {
+                ops.push_back(arg);
+            }
+            break;
+        }
+        case ValueType::ReturnInstTy: {
+            auto ret = std::static_pointer_cast<ReturnInst>(inst);
+            if (ret->getReturnValue()) {
+                ops.push_back(ret->getReturnValue());
+            }
+            break;
+        }
+        case ValueType::BranchInstTy: {
+            auto br = std::static_pointer_cast<BranchInst>(inst);
+            ops.push_back(br->getCondition());
+            break;
+        }
+        default:
+            break;
+    }
 }
 }
 
@@ -149,6 +230,111 @@ Visitor::CseResult Visitor::reuseGEP(TypePtr elementType, ValuePtr address, cons
     }
     table[key] = inst;
     return {inst, true};
+}
+
+void Visitor::runDCE(const FunctionPtr &func) {
+    if (!func) return;
+    // Remove stores to local allocas that are never loaded (dead temporaries).
+    std::unordered_set<const Value*> deadAllocas;
+    for (auto bbIt = func->basicBlockBegin(); bbIt != func->basicBlockEnd(); ++bbIt) {
+        auto bb = *bbIt;
+        for (auto instIt = bb->instructionBegin(); instIt != bb->instructionEnd(); ++instIt) {
+            auto inst = *instIt;
+            if (inst->getValueType() == ValueType::AllocaInstTy) {
+                deadAllocas.insert(inst.get());
+            } else if (inst->getValueType() == ValueType::LoadInstTy) {
+                auto ld = std::static_pointer_cast<LoadInst>(inst);
+                deadAllocas.erase(ld->getAddressOperand().get());
+            } else if (inst->getValueType() == ValueType::GetElementPtrInstTy) {
+                auto gep = std::static_pointer_cast<GetElementPtrInst>(inst);
+                deadAllocas.erase(gep->getAddressOperand().get());
+            }
+        }
+    }
+    if (!deadAllocas.empty()) {
+        for (auto bbIt = func->basicBlockBegin(); bbIt != func->basicBlockEnd(); ++bbIt) {
+            auto bb = *bbIt;
+            for (auto instIt = bb->instructionBegin(); instIt != bb->instructionEnd(); ) {
+                auto inst = *instIt;
+                auto nextIt = instIt;
+                ++nextIt;
+                if (inst->getValueType() == ValueType::StoreInstTy) {
+                    auto st = std::static_pointer_cast<StoreInst>(inst);
+                    if (deadAllocas.count(st->getAddressOperand().get()) > 0) {
+                        bb->removeInstruction(inst);
+                        instIt = nextIt;
+                        continue;
+                    }
+                }
+                instIt = nextIt;
+            }
+        }
+        for (auto bbIt = func->basicBlockBegin(); bbIt != func->basicBlockEnd(); ++bbIt) {
+            auto bb = *bbIt;
+            for (auto instIt = bb->instructionBegin(); instIt != bb->instructionEnd(); ) {
+                auto inst = *instIt;
+                auto nextIt = instIt;
+                ++nextIt;
+                if (inst->getValueType() == ValueType::AllocaInstTy &&
+                    deadAllocas.count(inst.get()) > 0) {
+                    bb->removeInstruction(inst);
+                    instIt = nextIt;
+                    continue;
+                }
+                instIt = nextIt;
+            }
+        }
+    }
+    std::unordered_map<const Value*, int> useCount;
+    std::unordered_map<const Value*, BasicBlockPtr> defBlock;
+    std::vector<std::pair<InstructionPtr, BasicBlockPtr>> defs;
+
+    for (auto bbIt = func->basicBlockBegin(); bbIt != func->basicBlockEnd(); ++bbIt) {
+        auto bb = *bbIt;
+        for (auto instIt = bb->instructionBegin(); instIt != bb->instructionEnd(); ++instIt) {
+            auto inst = *instIt;
+            defs.emplace_back(inst, bb);
+            defBlock[inst.get()] = bb;
+            std::vector<ValuePtr> ops;
+            collectOperands(inst, ops);
+            for (const auto &op : ops) {
+                if (op) {
+                    ++useCount[op.get()];
+                }
+            }
+        }
+    }
+
+    std::vector<std::pair<InstructionPtr, BasicBlockPtr>> worklist;
+    for (const auto &[inst, bb] : defs) {
+        if (isRemovable(inst) && useCount[inst.get()] == 0) {
+            worklist.emplace_back(inst, bb);
+        }
+    }
+
+    while (!worklist.empty()) {
+        auto [inst, bb] = worklist.back();
+        worklist.pop_back();
+        if (!inst || !bb) continue;
+
+        std::vector<ValuePtr> ops;
+        collectOperands(inst, ops);
+        bb->removeInstruction(inst);
+
+        for (const auto &op : ops) {
+            if (!op) continue;
+            auto it = useCount.find(op.get());
+            if (it == useCount.end() || it->second <= 0) continue;
+            --(it->second);
+            auto opInst = std::dynamic_pointer_cast<Instruction>(op);
+            if (opInst && isRemovable(opInst) && it->second == 0) {
+                auto defIt = defBlock.find(op.get());
+                if (defIt != defBlock.end()) {
+                    worklist.emplace_back(opInst, defIt->second);
+                }
+            }
+        }
+    }
 }
 
 BasicBlockPtr Visitor::newBlock(const std::string &hint) {
@@ -1197,11 +1383,11 @@ FunctionPtr Visitor::visitFuncDef(const FuncDef &funcDef) {
 
     cur_scope_ = cur_scope_->popScope();
 
-    ir_module_.addFunction(funcValue);
-
     if (cur_block_ != nullptr && funcDef.funcType->kind == FuncType::VOID) {
         insertInst(ReturnInst::create());
     }
+    runDCE(cur_func_);
+    ir_module_.addFunction(funcValue);
     cur_block_ = nullptr;
     entry_block_ = nullptr;
     staticLocalId_ = 0;
@@ -1225,6 +1411,7 @@ FunctionPtr Visitor::visitMainFuncDef(const MainFuncDef &mainFunc) {
     if (cur_block_ != nullptr) {
         insertInst(ReturnInst::create(makeConst(ir_module_.getContext(), 0)));
     }
+    runDCE(cur_func_);
     ir_module_.addFunction(cur_func_);
     entry_block_ = nullptr;
     cur_block_ = nullptr;
