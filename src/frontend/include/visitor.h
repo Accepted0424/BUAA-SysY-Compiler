@@ -1,6 +1,7 @@
 # pragma once
 
 #include <memory>
+#include <unordered_map>
 
 #include "ast.h"
 #include "symtable.h"
@@ -8,6 +9,7 @@
 #include "llvm/include/ir/value/Function.h"
 #include "llvm/include/ir/value/Value.h"
 #include "llvm/include/ir/value/inst/BinaryInstruction.h"
+#include "llvm/include/ir/value/inst/UnaryInstruction.h"
 
 using namespace AstNode;
 
@@ -102,4 +104,18 @@ private:
     bool visitBlockItem(const BlockItem &blockItem, bool isLast);
 
     void visitBlock(const Block &block, bool isFuncBlock);
+
+    struct CseResult {
+        ValuePtr value;
+        bool created;
+    };
+
+    std::unordered_map<std::string, ValuePtr> &currentCseTable();
+    CseResult reuseBinary(BinaryOpType op, ValuePtr lhs, ValuePtr rhs);
+    CseResult reuseCompare(CompareOpType op, ValuePtr lhs, ValuePtr rhs);
+    CseResult reuseUnary(UnaryOpType op, ValuePtr operand);
+    CseResult reuseZExt(TypePtr targetType, ValuePtr operand);
+    CseResult reuseGEP(TypePtr elementType, ValuePtr address, const std::vector<ValuePtr> &indices);
+
+    std::unordered_map<BasicBlock*, std::unordered_map<std::string, ValuePtr>> cseTables_;
 };

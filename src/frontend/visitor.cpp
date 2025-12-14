@@ -2,6 +2,8 @@
 
 #include <functional>
 #include <optional>
+#include <unordered_map>
+#include <utility>
 
 #include "logger.h"
 #include "llvm/include/ir/IrForward.h"
@@ -17,6 +19,22 @@
 namespace {
 ConstantIntPtr makeConst(LlvmContext* ctx, int value) {
     return ConstantInt::create(ctx->getIntegerTy(), value);
+}
+
+std::string ptrKey(const ValuePtr &value) {
+    return std::to_string(reinterpret_cast<uintptr_t>(value.get()));
+}
+
+std::string typeKey(const TypePtr &type) {
+    return std::to_string(reinterpret_cast<uintptr_t>(type.get()));
+}
+
+bool isCommutative(const BinaryOpType op) {
+    return op == BinaryOpType::ADD || op == BinaryOpType::MUL;
+}
+
+bool isCommutative(const CompareOpType op) {
+    return op == CompareOpType::EQL || op == CompareOpType::NEQ;
 }
 }
 
@@ -36,6 +54,101 @@ void Visitor::insertInst(const InstructionPtr &inst, bool toEntry) {
     if (cur_block_ != nullptr) {
         cur_block_->insertInstruction(inst);
     }
+}
+
+std::unordered_map<std::string, ValuePtr> &Visitor::currentCseTable() {
+    static std::unordered_map<std::string, ValuePtr> dummy;
+    if (cur_block_ == nullptr) return dummy;
+    return cseTables_[cur_block_.get()];
+}
+
+Visitor::CseResult Visitor::reuseBinary(BinaryOpType op, ValuePtr lhs, ValuePtr rhs) {
+    auto inst = BinaryOperator::create(op, lhs, rhs);
+    if (cur_block_ == nullptr) {
+        return {inst, true};
+    }
+    auto a = ptrKey(lhs);
+    auto b = ptrKey(rhs);
+    if (isCommutative(op) && a > b) {
+        std::swap(a, b);
+    }
+    const std::string key = "bin|" + std::to_string(static_cast<int>(op)) + "|" + a + "|" + b;
+    auto &table = currentCseTable();
+    auto it = table.find(key);
+    if (it != table.end()) {
+        return {it->second, false};
+    }
+    table[key] = inst;
+    return {inst, true};
+}
+
+Visitor::CseResult Visitor::reuseCompare(CompareOpType op, ValuePtr lhs, ValuePtr rhs) {
+    auto inst = CompareOperator::create(op, lhs, rhs);
+    if (cur_block_ == nullptr) {
+        return {inst, true};
+    }
+    auto a = ptrKey(lhs);
+    auto b = ptrKey(rhs);
+    if (isCommutative(op) && a > b) {
+        std::swap(a, b);
+    }
+    const std::string key = "cmp|" + std::to_string(static_cast<int>(op)) + "|" + a + "|" + b;
+    auto &table = currentCseTable();
+    auto it = table.find(key);
+    if (it != table.end()) {
+        return {it->second, false};
+    }
+    table[key] = inst;
+    return {inst, true};
+}
+
+Visitor::CseResult Visitor::reuseUnary(UnaryOpType op, ValuePtr operand) {
+    auto inst = UnaryOperator::create(op, operand);
+    if (cur_block_ == nullptr) {
+        return {inst, true};
+    }
+    const std::string key = "un|" + std::to_string(static_cast<int>(op)) + "|" + ptrKey(operand);
+    auto &table = currentCseTable();
+    auto it = table.find(key);
+    if (it != table.end()) {
+        return {it->second, false};
+    }
+    table[key] = inst;
+    return {inst, true};
+}
+
+Visitor::CseResult Visitor::reuseZExt(TypePtr targetType, ValuePtr operand) {
+    auto inst = ZExtInst::create(targetType, operand);
+    if (cur_block_ == nullptr) {
+        return {inst, true};
+    }
+    const std::string key = "zext|" + typeKey(targetType) + "|" + ptrKey(operand);
+    auto &table = currentCseTable();
+    auto it = table.find(key);
+    if (it != table.end()) {
+        return {it->second, false};
+    }
+    table[key] = inst;
+    return {inst, true};
+}
+
+Visitor::CseResult Visitor::reuseGEP(TypePtr elementType, ValuePtr address, const std::vector<ValuePtr> &indices) {
+    auto inst = GetElementPtrInst::create(elementType, address, indices);
+    if (cur_block_ == nullptr) {
+        return {inst, true};
+    }
+    std::string key = "gep|" + typeKey(elementType) + "|" + ptrKey(address);
+    key += "|" + std::to_string(indices.size());
+    for (const auto &idx : indices) {
+        key += "|" + ptrKey(idx);
+    }
+    auto &table = currentCseTable();
+    auto it = table.find(key);
+    if (it != table.end()) {
+        return {it->second, false};
+    }
+    table[key] = inst;
+    return {inst, true};
 }
 
 BasicBlockPtr Visitor::newBlock(const std::string &hint) {
@@ -94,9 +207,11 @@ ValuePtr Visitor::zextToInt32(const ValuePtr &value) {
         if (!forceZext && intType->getBitWidth() == 32) {
             return value;
         }
-        auto zext = ZExtInst::create(ctxInt32, value);
-        insertInst(zext);
-        return zext;
+        auto res = reuseZExt(ctxInt32, value);
+        if (res.created) {
+            insertInst(std::dynamic_pointer_cast<Instruction>(res.value));
+        }
+        return res.value;
     }
     return value;
 }
@@ -106,9 +221,11 @@ ValuePtr Visitor::createCmp(CompareOpType op, ValuePtr lhs, ValuePtr rhs) {
     rhs = loadIfPointer(rhs);
     lhs = zextToInt32(lhs);
     rhs = zextToInt32(rhs);
-    auto cmp = CompareOperator::create(op, lhs, rhs);
-    insertInst(cmp);
-    return cmp;
+    auto res = reuseCompare(op, lhs, rhs);
+    if (res.created) {
+        insertInst(std::dynamic_pointer_cast<Instruction>(res.value));
+    }
+    return res.value;
 }
 
 std::optional<int> Visitor::constValueOfLVal(const LVal &lval) {
@@ -247,9 +364,11 @@ ValuePtr Visitor::getLValAddress(const LVal &lval) {
             gepType = arrType->getElementType();
         }
         indices.push_back(idxVal);
-        auto gep = GetElementPtrInst::create(gepType, base, indices);
-        insertInst(gep);
-        base = gep;
+        auto res = reuseGEP(gepType, base, indices);
+        if (res.created) {
+            insertInst(std::dynamic_pointer_cast<Instruction>(res.value));
+        }
+        base = res.value;
     }
     return base;
 }
@@ -310,9 +429,11 @@ ValuePtr Visitor::visitUnaryExp(const UnaryExp &unaryExp) {
                             auto paramArrayType = std::static_pointer_cast<ArrayType>(paramType);
                             if (argArrayType->getElementNum() >= 0 && paramArrayType->getElementNum() < 0) {
                                 auto zero = makeConst(ir_module_.getContext(), 0);
-                                auto decay = GetElementPtrInst::create(paramType, argVal, {zero, zero});
-                                insertInst(decay);
-                                argVal = decay;
+                                auto decay = reuseGEP(paramType, argVal, {zero, zero});
+                                if (decay.created) {
+                                    insertInst(std::dynamic_pointer_cast<Instruction>(decay.value));
+                                }
+                                argVal = decay.value;
                             }
                             if (argVal->getType() != paramType) {
                                 ErrorReporter::error(unaryExp.lineno, ERR_FUNC_ARG_TYPE_MISMATCH);
@@ -343,10 +464,22 @@ ValuePtr Visitor::visitUnaryExp(const UnaryExp &unaryExp) {
             ValuePtr res = nullptr;
             switch (unaryExp.unary->op->kind) {
                 case UnaryOp::PLUS:
-                    res = UnaryOperator::create(UnaryOpType::POS, rhs);
+                    {
+                        auto uni = reuseUnary(UnaryOpType::POS, rhs);
+                        if (uni.created) {
+                            insertInst(std::dynamic_pointer_cast<Instruction>(uni.value));
+                        }
+                        res = uni.value;
+                    }
                     break;
                 case UnaryOp::MINU:
-                    res = UnaryOperator::create(UnaryOpType::NEG, rhs);
+                    {
+                        auto uni = reuseUnary(UnaryOpType::NEG, rhs);
+                        if (uni.created) {
+                            insertInst(std::dynamic_pointer_cast<Instruction>(uni.value));
+                        }
+                        res = uni.value;
+                    }
                     break;
                 case UnaryOp::NOT:
                     res = createCmp(CompareOpType::EQL, rhs, makeConst(ir_module_.getContext(), 0));
@@ -354,9 +487,6 @@ ValuePtr Visitor::visitUnaryExp(const UnaryExp &unaryExp) {
                 default:
                     LOG_ERROR("Unreachable in Visitor::visitUnaryExp");
                     return nullptr;
-            }
-            if (res && res->getValueType() != ValueType::CompareInstTy) {
-                insertInst(std::dynamic_pointer_cast<Instruction>(res));
             }
             return res;
         }
@@ -370,16 +500,31 @@ ValuePtr Visitor::visitMulExp(const MulExp &mulExp) {
         auto rhsVal = loadIfPointer(visitUnaryExp(*rhs));
         switch (op) {
             case MulExp::MULT:
-                lhs = BinaryOperator::create(BinaryOpType::MUL, lhs, rhsVal);
-                insertInst(std::dynamic_pointer_cast<Instruction>(lhs));
+                {
+                    auto res = reuseBinary(BinaryOpType::MUL, lhs, rhsVal);
+                    if (res.created) {
+                        insertInst(std::dynamic_pointer_cast<Instruction>(res.value));
+                    }
+                    lhs = res.value;
+                }
                 break;
             case MulExp::DIV:
-                lhs = BinaryOperator::create(BinaryOpType::DIV, lhs, rhsVal);
-                insertInst(std::dynamic_pointer_cast<Instruction>(lhs));
+                {
+                    auto res = reuseBinary(BinaryOpType::DIV, lhs, rhsVal);
+                    if (res.created) {
+                        insertInst(std::dynamic_pointer_cast<Instruction>(res.value));
+                    }
+                    lhs = res.value;
+                }
                 break;
             case MulExp::MOD:
-                lhs = BinaryOperator::create(BinaryOpType::MOD, lhs, rhsVal);
-                insertInst(std::dynamic_pointer_cast<Instruction>(lhs));
+                {
+                    auto res = reuseBinary(BinaryOpType::MOD, lhs, rhsVal);
+                    if (res.created) {
+                        insertInst(std::dynamic_pointer_cast<Instruction>(res.value));
+                    }
+                    lhs = res.value;
+                }
                 break;
         }
     }
@@ -392,12 +537,22 @@ ValuePtr Visitor::visitAddExp(const AddExp &addExp) {
         auto rhsVal = loadIfPointer(visitMulExp(*rhs));
         switch (op) {
             case AddExp::PLUS:
-                lhs = BinaryOperator::create(BinaryOpType::ADD, lhs, rhsVal);
-                insertInst(std::dynamic_pointer_cast<Instruction>(lhs));
+                {
+                    auto res = reuseBinary(BinaryOpType::ADD, lhs, rhsVal);
+                    if (res.created) {
+                        insertInst(std::dynamic_pointer_cast<Instruction>(res.value));
+                    }
+                    lhs = res.value;
+                }
                 break;
             case AddExp::MINU:
-                lhs = BinaryOperator::create(BinaryOpType::SUB, lhs, rhsVal);
-                insertInst(std::dynamic_pointer_cast<Instruction>(lhs));
+                {
+                    auto res = reuseBinary(BinaryOpType::SUB, lhs, rhsVal);
+                    if (res.created) {
+                        insertInst(std::dynamic_pointer_cast<Instruction>(res.value));
+                    }
+                    lhs = res.value;
+                }
                 break;
         }
     }
@@ -461,9 +616,11 @@ void Visitor::visitConstDecl(const ConstDecl &constDecl) {
                 insertInst(alloca, true);
                 for (int i = 0; i < static_cast<int>(initialValList.size()); i++) {
                     auto idxConst = makeConst(context, i);
-                    auto gep = GetElementPtrInst::create(context->getIntegerTy(), alloca, {makeConst(context, 0), idxConst});
-                    insertInst(gep);
-                    auto store = StoreInst::create(initialValList[i], gep);
+                    auto gep = reuseGEP(context->getIntegerTy(), alloca, {makeConst(context, 0), idxConst});
+                    if (gep.created) {
+                        insertInst(std::dynamic_pointer_cast<Instruction>(gep.value));
+                    }
+                    auto store = StoreInst::create(initialValList[i], gep.value);
                     insertInst(store);
                 }
                 symbol->value = alloca;
@@ -569,9 +726,11 @@ void Visitor::visitVarDecl(const VarDecl &varDecl) {
                         if (idx >= arraySize && arraySize > 0) break;
                         auto val = loadIfPointer(visitExp(*exp));
                         auto idxConst = makeConst(context, idx++);
-                        auto gep = GetElementPtrInst::create(context->getIntegerTy(), alloca, {makeConst(context, 0), idxConst});
-                        insertInst(gep);
-                        insertInst(StoreInst::create(val, gep));
+                        auto gep = reuseGEP(context->getIntegerTy(), alloca, {makeConst(context, 0), idxConst});
+                        if (gep.created) {
+                            insertInst(std::dynamic_pointer_cast<Instruction>(gep.value));
+                        }
+                        insertInst(StoreInst::create(val, gep.value));
                     }
                 }
             } else {
@@ -969,6 +1128,7 @@ void Visitor::visitBlock(const Block &block, bool isFuncBlock) {
 
 FunctionPtr Visitor::visitFuncDef(const FuncDef &funcDef) {
     auto context = ir_module_.getContext();
+    cseTables_.clear();
 
     std::vector<ArgumentPtr> paramArgs;
     std::vector<TypePtr> paramTypes;
