@@ -4,6 +4,9 @@
 #include <array>
 #include <cctype>
 #include <cstdint>
+#include <limits>
+#include <memory>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -146,7 +149,7 @@ void collectOperands(const InstructionPtr &inst, std::vector<ValuePtr> &ops) {
 class TempRegPool {
 public:
     TempRegPool() {
-        for (int i = 0; i <= 7; ++i) {
+        for (int i = 0; i <= 6; ++i) {
             regs_.push_back("$t" + std::to_string(i));
         }
     }
@@ -183,9 +186,12 @@ struct FrameInfo {
     std::unordered_map<const Value*, int> allocaOffsets;
     std::unordered_map<const Argument*, int> argOffsets;
     std::unordered_map<const Argument*, int> callerArgOffsets;
+    std::unordered_map<const Argument*, std::string> argRegs;
     std::unordered_map<const BasicBlock*, std::string> blockLabels;
     RegisterPlan regs;
     int frameSize = 8;  // reserve space for $fp and $ra
+    bool omitPrologue = false;
+    bool hasCall = false;
 };
 
 struct BlockRegCache {
@@ -274,6 +280,29 @@ private:
     Module &module_;
     std::ostream &out_;
     TempRegPool temps_;
+    const BasicBlock *curBlock_ = nullptr;
+    const Value *curInductionAddr_ = nullptr;
+    int loopId_ = 0;
+
+    struct LoopInfo {
+        BasicBlockPtr cond;
+        BasicBlockPtr body;
+        BasicBlockPtr step;
+        BasicBlockPtr end;
+        ValuePtr addr;
+    };
+
+    struct ArrayLoopEmit {
+        ValuePtr base;
+        ValuePtr delta;
+        int startIdx = 0;
+        int count = 0;
+        int stride = 4;
+    };
+
+    std::vector<std::unique_ptr<LoopInfo>> loopInfos_;
+    std::unordered_map<const BasicBlock*, const LoopInfo*> loopForBlock_;
+    std::unordered_map<const BasicBlock*, const LoopInfo*> loopByCond_;
 
     static bool allocatableValue(const ValuePtr &v) {
         if (!v) return false;
@@ -332,6 +361,215 @@ private:
             avail.pop_back();
             plan.valueRegs[val] = reg;
             plan.calleeSaved.push_back(reg);
+        }
+
+        return plan;
+    }
+
+    bool functionHasCall(const FunctionPtr &func) {
+        for (auto bbIt = func->basicBlockBegin(); bbIt != func->basicBlockEnd(); ++bbIt) {
+            auto bb = *bbIt;
+            for (auto instIt = bb->instructionBegin(); instIt != bb->instructionEnd(); ++instIt) {
+                if ((*instIt)->getValueType() == ValueType::CallInstTy) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    InstructionPtr getTerminator(const BasicBlockPtr &bb) {
+        InstructionPtr last = nullptr;
+        for (auto it = bb->instructionBegin(); it != bb->instructionEnd(); ++it) {
+            last = *it;
+        }
+        return last;
+    }
+
+    void detectLoopInductions(const FunctionPtr &func) {
+        loopInfos_.clear();
+        loopForBlock_.clear();
+        loopByCond_.clear();
+        for (auto bbIt = func->basicBlockBegin(); bbIt != func->basicBlockEnd(); ++bbIt) {
+            auto cond = *bbIt;
+            auto term = getTerminator(cond);
+            if (!term || term->getValueType() != ValueType::BranchInstTy) {
+                continue;
+            }
+            auto br = std::static_pointer_cast<BranchInst>(term);
+            auto body = br->getTrueBlock();
+            auto end = br->getFalseBlock();
+            if (!body || !end) continue;
+            auto bodyTerm = getTerminator(body);
+            if (!bodyTerm || bodyTerm->getValueType() != ValueType::JumpInstTy) continue;
+            auto step = std::static_pointer_cast<JumpInst>(bodyTerm)->getTarget();
+            if (!step) continue;
+            auto stepTerm = getTerminator(step);
+            if (!stepTerm || stepTerm->getValueType() != ValueType::JumpInstTy) continue;
+            if (std::static_pointer_cast<JumpInst>(stepTerm)->getTarget() != cond) continue;
+
+            auto cmp = std::dynamic_pointer_cast<CompareOperator>(br->getCondition());
+            if (!cmp) continue;
+            ValuePtr addr = nullptr;
+            if (auto ld = std::dynamic_pointer_cast<LoadInst>(cmp->getLhs())) {
+                addr = ld->getAddressOperand();
+            } else if (auto ld = std::dynamic_pointer_cast<LoadInst>(cmp->getRhs())) {
+                addr = ld->getAddressOperand();
+            }
+            if (!addr) continue;
+
+            auto info = std::make_unique<LoopInfo>();
+            info->cond = cond;
+            info->body = body;
+            info->step = step;
+            info->end = end;
+            info->addr = addr;
+
+            auto raw = info.get();
+            loopInfos_.push_back(std::move(info));
+            loopForBlock_[cond.get()] = raw;
+            loopForBlock_[body.get()] = raw;
+            loopForBlock_[step.get()] = raw;
+            loopByCond_[cond.get()] = raw;
+        }
+    }
+
+    bool isZeroConst(const ValuePtr &value) {
+        auto ci = std::dynamic_pointer_cast<ConstantInt>(value);
+        return ci && ci->getValue() == 0;
+    }
+
+    std::optional<ArrayLoopEmit> matchArrayUpdate(const InstructionPtr &inst,
+        std::vector<const Instruction*> &parts) {
+        if (!inst || inst->getValueType() != ValueType::StoreInstTy) {
+            return std::nullopt;
+        }
+        auto st = std::static_pointer_cast<StoreInst>(inst);
+        auto add = std::dynamic_pointer_cast<BinaryOperator>(st->getValueOperand());
+        if (!add || add->OpType() != BinaryOpType::ADD) {
+            return std::nullopt;
+        }
+        auto lhsLoad = std::dynamic_pointer_cast<LoadInst>(add->lhs_);
+        auto rhsLoad = std::dynamic_pointer_cast<LoadInst>(add->rhs_);
+        ValuePtr delta;
+        LoadInstPtr load;
+        if (lhsLoad) {
+            load = lhsLoad;
+            delta = add->rhs_;
+        } else if (rhsLoad) {
+            load = rhsLoad;
+            delta = add->lhs_;
+        } else {
+            return std::nullopt;
+        }
+        if (!load) return std::nullopt;
+        if (load->getAddressOperand() != st->getAddressOperand()) {
+            return std::nullopt;
+        }
+        auto gep = std::dynamic_pointer_cast<GetElementPtrInst>(st->getAddressOperand());
+        if (!gep) return std::nullopt;
+        const auto &indices = gep->getIndices();
+        if (indices.empty()) return std::nullopt;
+        for (size_t i = 0; i + 1 < indices.size(); ++i) {
+            if (!isZeroConst(indices[i])) {
+                return std::nullopt;
+            }
+        }
+        auto idxConst = std::dynamic_pointer_cast<ConstantInt>(indices.back());
+        if (!idxConst) return std::nullopt;
+
+        ArrayLoopEmit emit;
+        emit.base = gep->getAddressOperand();
+        emit.delta = delta;
+        emit.startIdx = idxConst->getValue();
+        emit.count = 1;
+        emit.stride = typeSize(gep->getType());
+
+        parts.push_back(load.get());
+        parts.push_back(add.get());
+        parts.push_back(gep.get());
+        parts.push_back(st.get());
+        return emit;
+    }
+
+    struct ArrayLoopPlan {
+        std::unordered_map<const Instruction*, ArrayLoopEmit> emitAt;
+        std::unordered_set<const Instruction*> skip;
+    };
+
+    ArrayLoopPlan buildArrayLoops(const BasicBlockPtr &bb) {
+        ArrayLoopPlan plan;
+        std::vector<InstructionPtr> insts;
+        std::unordered_map<const Instruction*, size_t> index;
+        size_t idx = 0;
+        for (auto it = bb->instructionBegin(); it != bb->instructionEnd(); ++it, ++idx) {
+            insts.push_back(*it);
+            index[(*it).get()] = idx;
+        }
+
+        struct Match {
+            InstructionPtr store;
+            std::vector<const Instruction*> parts;
+            ArrayLoopEmit emit;
+        };
+        std::vector<Match> matches;
+        for (const auto &inst : insts) {
+            std::vector<const Instruction*> parts;
+            auto maybe = matchArrayUpdate(inst, parts);
+            if (maybe) {
+                matches.push_back({inst, parts, *maybe});
+            }
+        }
+
+        size_t i = 0;
+        while (i < matches.size()) {
+            auto &m = matches[i];
+            int expected = m.emit.startIdx;
+            size_t j = i;
+            ArrayLoopEmit cur = m.emit;
+            std::vector<const Instruction*> runParts;
+
+            while (j < matches.size()) {
+                auto &mj = matches[j];
+                if (mj.emit.base.get() != cur.base.get() ||
+                    mj.emit.delta.get() != cur.delta.get() ||
+                    mj.emit.startIdx != expected) {
+                    break;
+                }
+                runParts.insert(runParts.end(), mj.parts.begin(), mj.parts.end());
+                expected += 1;
+                j += 1;
+            }
+
+            const int runCount = expected - cur.startIdx;
+            if (runCount >= 3) {
+                const Instruction *emitAt = nullptr;
+                size_t emitIndex = std::numeric_limits<size_t>::max();
+                for (const auto *part : runParts) {
+                    auto it = index.find(part);
+                    if (it != index.end() && it->second < emitIndex) {
+                        emitIndex = it->second;
+                        emitAt = part;
+                    }
+                }
+                if (emitAt) {
+                    bool overlaps = false;
+                    for (const auto *part : runParts) {
+                        if (plan.skip.count(part)) {
+                            overlaps = true;
+                            break;
+                        }
+                    }
+                    if (!overlaps) {
+                        cur.count = runCount;
+                        plan.emitAt[emitAt] = cur;
+                        for (const auto *part : runParts) {
+                            plan.skip.insert(part);
+                        }
+                    }
+                }
+            }
+            i = j;
         }
 
         return plan;
@@ -459,8 +697,10 @@ private:
         emitBuiltinEpilogue(frameSize);
     }
 
-    FrameInfo buildFrameInfo(const FunctionPtr &func, const std::string &funcLabelPrefix, const RegisterPlan &plan) {
+    FrameInfo buildFrameInfo(const FunctionPtr &func, const std::string &funcLabelPrefix,
+        const RegisterPlan &plan, bool hasCall) {
         FrameInfo info;
+        info.hasCall = hasCall;
         int nextOffset = 8;  // keep space for $ra and $fp near the top of the frame
 
         std::vector<InstructionPtr> instList;
@@ -497,8 +737,12 @@ private:
                 info.callerArgOffsets[arg.get()] = (argIdx - 4) * 4;
             }
             if (argIdx < 4 && plan.valueRegs.count(arg.get()) == 0 && arg->getUseCount() > 0) {
-                nextOffset += 4;
-                info.argOffsets[arg.get()] = -nextOffset;
+                if (!hasCall) {
+                    info.argRegs[arg.get()] = "$a" + std::to_string(argIdx);
+                } else {
+                    nextOffset += 4;
+                    info.argOffsets[arg.get()] = -nextOffset;
+                }
             }
             ++argIdx;
         }
@@ -545,6 +789,14 @@ private:
             saveOffset += 4;
         }
 
+        const bool noStackSlots = info.allocaOffsets.empty() && info.valueOffsets.empty() &&
+            info.argOffsets.empty() && plan.calleeSaved.empty();
+        const bool noCallerArgs = info.callerArgOffsets.empty();
+        if (!hasCall && noStackSlots && noCallerArgs) {
+            info.frameSize = 0;
+            info.omitPrologue = true;
+        }
+
         int bbId = 0;
         std::unordered_set<std::string> usedLabels;
         for (auto bbIt = func->basicBlockBegin(); bbIt != func->basicBlockEnd(); ++bbIt) {
@@ -570,18 +822,24 @@ private:
     void emitFunction(const FunctionPtr &func) {
         const auto funcName = sanitizeName(func->getName());
         auto regPlan = planRegisters(func);
-        FrameInfo frame = buildFrameInfo(func, funcName, regPlan);
+        const bool hasCall = functionHasCall(func);
+        FrameInfo frame = buildFrameInfo(func, funcName, regPlan, hasCall);
+        detectLoopInductions(func);
         auto skipInsts = computeSkipInsts(func);
         const std::string retLabel = funcName + "_ret";
 
         out_ << "\n" << funcName << ":\n";
-        out_ << "  addi $sp, $sp, -" << frame.frameSize << "\n";
-        out_ << "  sw $ra, " << frame.frameSize - 4 << "($sp)\n";
-        out_ << "  sw $fp, " << frame.frameSize - 8 << "($sp)\n";
-        out_ << "  addi $fp, $sp, " << frame.frameSize << "\n";
-        for (const auto &reg : frame.regs.calleeSaved) {
-            const int offset = frame.regs.calleeSavedOffsets.at(reg);
-            out_ << "  sw " << reg << ", " << offset << "($sp)\n";
+        if (!frame.omitPrologue) {
+            out_ << "  addi $sp, $sp, -" << frame.frameSize << "\n";
+            if (frame.hasCall) {
+                out_ << "  sw $ra, " << frame.frameSize - 4 << "($sp)\n";
+            }
+            out_ << "  sw $fp, " << frame.frameSize - 8 << "($sp)\n";
+            out_ << "  addi $fp, $sp, " << frame.frameSize << "\n";
+            for (const auto &reg : frame.regs.calleeSaved) {
+                const int offset = frame.regs.calleeSavedOffsets.at(reg);
+                out_ << "  sw " << reg << ", " << offset << "($sp)\n";
+            }
         }
         // seed callee-saved registers / home slots for arguments
         int argIdx = 0;
@@ -605,29 +863,44 @@ private:
 
         for (auto bbIt = func->basicBlockBegin(); bbIt != func->basicBlockEnd(); ++bbIt) {
             auto bb = *bbIt;
+            curBlock_ = bb.get();
+            auto loopIt = loopForBlock_.find(bb.get());
+            curInductionAddr_ = (loopIt != loopForBlock_.end()) ? loopIt->second->addr.get() : nullptr;
             BlockRegCache cache;
             cache.reset();
+            auto arrayLoops = buildArrayLoops(bb);
             out_ << frame.blockLabels[bb.get()] << ":\n";
             for (auto instIt = bb->instructionBegin(); instIt != bb->instructionEnd(); ++instIt) {
-                emitInstruction(*instIt, frame, retLabel, cache, skipInsts);
+                emitInstruction(*instIt, frame, retLabel, cache, skipInsts, arrayLoops);
             }
         }
 
         out_ << retLabel << ":\n";
-        for (const auto &reg : frame.regs.calleeSaved) {
-            const int offset = frame.regs.calleeSavedOffsets.at(reg);
-            out_ << "  lw " << reg << ", " << offset << "($sp)\n";
+        if (!frame.omitPrologue) {
+            for (const auto &reg : frame.regs.calleeSaved) {
+                const int offset = frame.regs.calleeSavedOffsets.at(reg);
+                out_ << "  lw " << reg << ", " << offset << "($sp)\n";
+            }
+            if (frame.hasCall) {
+                out_ << "  lw $ra, " << frame.frameSize - 4 << "($sp)\n";
+            }
+            out_ << "  lw $fp, " << frame.frameSize - 8 << "($sp)\n";
+            out_ << "  addi $sp, $sp, " << frame.frameSize << "\n";
         }
-        out_ << "  lw $ra, " << frame.frameSize - 4 << "($sp)\n";
-        out_ << "  lw $fp, " << frame.frameSize - 8 << "($sp)\n";
-        out_ << "  addi $sp, $sp, " << frame.frameSize << "\n";
         out_ << "  jr $ra\n";
         emitNop();
+        curBlock_ = nullptr;
+        curInductionAddr_ = nullptr;
     }
 
     void emitInstruction(const InstructionPtr &inst, const FrameInfo &frame, const std::string &retLabel,
-        BlockRegCache &cache, const std::unordered_set<const Instruction*> &skipInsts) {
-        if (skipInsts.count(inst.get()) > 0) {
+        BlockRegCache &cache, const std::unordered_set<const Instruction*> &skipInsts,
+        const ArrayLoopPlan &arrayLoops) {
+        if (arrayLoops.emitAt.count(inst.get()) > 0) {
+            emitArrayUpdateLoop(arrayLoops.emitAt.at(inst.get()), frame, cache);
+            return;
+        }
+        if (skipInsts.count(inst.get()) > 0 || arrayLoops.skip.count(inst.get()) > 0) {
             return;
         }
         switch (inst->getValueType()) {
@@ -739,6 +1012,13 @@ private:
             }
             case ValueType::ArgumentTy: {
                 auto arg = std::static_pointer_cast<Argument>(value);
+                auto regIt = frame.argRegs.find(arg.get());
+                if (regIt != frame.argRegs.end()) {
+                    if (regIt->second != reg) {
+                        out_ << "  move " << reg << ", " << regIt->second << "\n";
+                    }
+                    return;
+                }
                 auto it = frame.argOffsets.find(arg.get());
                 if (it != frame.argOffsets.end()) {
                     out_ << "  lw " << reg << ", " << it->second << "($fp)\n";
@@ -839,6 +1119,13 @@ private:
             }
             case ValueType::ArgumentTy: {
                 auto arg = std::static_pointer_cast<Argument>(value);
+                auto regIt = frame.argRegs.find(arg.get());
+                if (regIt != frame.argRegs.end()) {
+                    if (regIt->second != reg) {
+                        out_ << "  move " << reg << ", " << regIt->second << "\n";
+                    }
+                    return;
+                }
                 auto it = frame.argOffsets.find(arg.get());
                 if (it != frame.argOffsets.end()) {
                     out_ << "  lw " << reg << ", " << it->second << "($fp)\n";
@@ -865,11 +1152,11 @@ private:
         auto it = frame.valueOffsets.find(value.get());
         if (it != frame.valueOffsets.end()) {
             out_ << "  sw " << reg << ", " << it->second << "($fp)\n";
-            if (regForValue(value, frame).empty() && value->getUseCount() > 1) {
-                auto cacheReg = cache.bind(value.get());
-                if (!cacheReg.empty() && cacheReg != reg) {
-                    out_ << "  move " << cacheReg << ", " << reg << "\n";
-                }
+        }
+        if (regForValue(value, frame).empty()) {
+            auto cacheReg = cache.bind(value.get());
+            if (!cacheReg.empty() && cacheReg != reg) {
+                out_ << "  move " << cacheReg << ", " << reg << "\n";
             }
         }
     }
@@ -878,6 +1165,9 @@ private:
         auto valReg = temps_.acquire();
         auto addrReg = temps_.acquire();
         loadValue(inst->getValueOperand(), frame, valReg, cache);
+        if (curInductionAddr_ && inst->getAddressOperand().get() == curInductionAddr_) {
+            out_ << "  move $t7, " << valReg << "\n";
+        }
         loadAddress(inst->getAddressOperand(), frame, addrReg);
         out_ << "  sw " << valReg << ", 0(" << addrReg << ")\n";
         temps_.release(valReg);
@@ -885,6 +1175,15 @@ private:
     }
 
     void emitLoad(const std::shared_ptr<LoadInst> &inst, const FrameInfo &frame, BlockRegCache &cache) {
+        if (curInductionAddr_ && inst->getAddressOperand().get() == curInductionAddr_) {
+            auto dst = acquireTargetReg(inst, frame);
+            if (dst.name != "$t7") {
+                out_ << "  move " << dst.name << ", $t7\n";
+            }
+            storeValue(inst, frame, dst.name, cache);
+            releaseTarget(dst);
+            return;
+        }
         auto addrReg = temps_.acquire();
         auto dst = acquireTargetReg(inst, frame);
         loadAddress(inst->getAddressOperand(), frame, addrReg);
@@ -967,6 +1266,47 @@ private:
         temps_.release(lhsReg);
         temps_.release(rhsReg);
         releaseTarget(dst);
+    }
+
+    void emitAddImmediate(const std::string &dst, const std::string &src, int imm) {
+        if (imm >= -32768 && imm <= 32767) {
+            out_ << "  addi " << dst << ", " << src << ", " << imm << "\n";
+            return;
+        }
+        auto tmp = temps_.acquire();
+        out_ << "  li " << tmp << ", " << imm << "\n";
+        out_ << "  addu " << dst << ", " << src << ", " << tmp << "\n";
+        temps_.release(tmp);
+    }
+
+    void emitArrayUpdateLoop(const ArrayLoopEmit &emit, const FrameInfo &frame, BlockRegCache &cache) {
+        const int stride = emit.stride > 0 ? emit.stride : 4;
+        auto baseReg = temps_.acquire();
+        auto deltaReg = temps_.acquire();
+        auto valReg = temps_.acquire();
+        auto cntReg = temps_.acquire();
+
+        loadAddress(emit.base, frame, baseReg);
+        const int startOffset = emit.startIdx * stride;
+        if (startOffset != 0) {
+            emitAddImmediate(baseReg, baseReg, startOffset);
+        }
+        loadValue(emit.delta, frame, deltaReg, cache);
+        out_ << "  li " << cntReg << ", " << emit.count << "\n";
+        const std::string loopLabel = "loop.opt." + std::to_string(loopId_++);
+        out_ << loopLabel << ":\n";
+        out_ << "  lw " << valReg << ", 0(" << baseReg << ")\n";
+        out_ << "  addu " << valReg << ", " << valReg << ", " << deltaReg << "\n";
+        out_ << "  sw " << valReg << ", 0(" << baseReg << ")\n";
+        emitAddImmediate(baseReg, baseReg, stride);
+        out_ << "  addi " << cntReg << ", " << cntReg << ", -1\n";
+        out_ << "  bne " << cntReg << ", $zero, " << loopLabel << "\n";
+        emitNop();
+
+        temps_.release(baseReg);
+        temps_.release(deltaReg);
+        temps_.release(valReg);
+        temps_.release(cntReg);
     }
 
     void emitCompare(const std::shared_ptr<CompareOperator> &inst, const FrameInfo &frame, BlockRegCache &cache) {
@@ -1143,6 +1483,10 @@ private:
     void emitCall(const std::shared_ptr<CallInst> &inst, const FrameInfo &frame, BlockRegCache &cache) {
         const auto funcName = sanitizeName(inst->getFunction()->getName());
         const auto &args = inst->getArgs();
+        if (curInductionAddr_) {
+            out_ << "  addi $sp, $sp, -4\n";
+            out_ << "  sw $t7, 0($sp)\n";
+        }
         const int argCount = static_cast<int>(args.size());
         for (int i = argCount - 1; i >= 4; --i) {
             auto arg = args[i];
@@ -1170,6 +1514,10 @@ private:
         emitNop();
         if (argCount > 4) {
             out_ << "  addi $sp, $sp, " << (argCount - 4) * 4 << "\n";
+        }
+        if (curInductionAddr_) {
+            out_ << "  lw $t7, 0($sp)\n";
+            out_ << "  addi $sp, $sp, 4\n";
         }
         cache.invalidateAll();
         const bool hasRet = inst->getType() && !inst->getType()->is(Type::VoidTyID);
@@ -1257,6 +1605,14 @@ private:
 
     void emitJump(const std::shared_ptr<JumpInst> &inst, const FrameInfo &frame) {
         auto target = inst->getTarget();
+        auto loopIt = loopByCond_.find(target.get());
+        if (loopIt != loopByCond_.end() && loopForBlock_.count(curBlock_) == 0) {
+            auto addr = loopIt->second->addr;
+            auto offIt = frame.allocaOffsets.find(addr.get());
+            if (offIt != frame.allocaOffsets.end()) {
+                out_ << "  lw $t7, " << offIt->second << "($fp)\n";
+            }
+        }
         out_ << "  j " << frame.blockLabels.at(target.get()) << "\n";
         emitNop();
     }
