@@ -38,6 +38,10 @@ public:
         basicBlocks_.push_back(std::move(bb));
     }
 
+    void removeBasicBlock(const BasicBlockPtr &bb) {
+        basicBlocks_.remove(bb);
+    }
+
     BasicBlockPtr getEntryBlock() {
         if (basicBlocks_.empty()) {
             return nullptr;

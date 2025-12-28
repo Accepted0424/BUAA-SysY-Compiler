@@ -14,6 +14,12 @@ public:
         addOperand(rhs_);
     };
 
+    void replaceOperandValue(const Value *oldVal, const ValuePtr &newVal) override {
+        if (lhs_.get() == oldVal) lhs_ = newVal;
+        if (rhs_.get() == oldVal) rhs_ = newVal;
+        replaceOperand(oldVal, newVal);
+    }
+
     ValuePtr lhs_;
     ValuePtr rhs_;
 };

@@ -42,6 +42,12 @@ public:
     ValuePtr getValueOperand() const { return value_; }
     ValuePtr getAddressOperand() const { return address_; }
 
+    void replaceOperandValue(const Value *oldVal, const ValuePtr &newVal) override {
+        if (value_.get() == oldVal) value_ = newVal;
+        if (address_.get() == oldVal) address_ = newVal;
+        replaceOperand(oldVal, newVal);
+    }
+
 private:
     ValuePtr value_;
     ValuePtr address_;
@@ -64,6 +70,11 @@ public:
     }
 
     ValuePtr getAddressOperand() const { return address_; }
+
+    void replaceOperandValue(const Value *oldVal, const ValuePtr &newVal) override {
+        if (address_.get() == oldVal) address_ = newVal;
+        replaceOperand(oldVal, newVal);
+    }
 
 private:
     ValuePtr address_;
@@ -90,6 +101,15 @@ public:
 
     std::shared_ptr<Function> getFunction() const { return function_; }
     const std::vector<ValuePtr> &getArgs() const { return args_; }
+
+    void replaceOperandValue(const Value *oldVal, const ValuePtr &newVal) override {
+        for (auto &arg : args_) {
+            if (arg.get() == oldVal) {
+                arg = newVal;
+            }
+        }
+        replaceOperand(oldVal, newVal);
+    }
 
 private:
     std::shared_ptr<Function> function_;
@@ -118,6 +138,16 @@ public:
     ValuePtr getAddressOperand() const { return address_; }
     const std::vector<ValuePtr> &getIndices() const { return indices_; }
 
+    void replaceOperandValue(const Value *oldVal, const ValuePtr &newVal) override {
+        if (address_.get() == oldVal) address_ = newVal;
+        for (auto &idx : indices_) {
+            if (idx.get() == oldVal) {
+                idx = newVal;
+            }
+        }
+        replaceOperand(oldVal, newVal);
+    }
+
 private:
     ValuePtr address_;
     std::vector<ValuePtr> indices_;
@@ -139,6 +169,11 @@ public:
 
     ValuePtr getReturnValue() const { return value_; }
 
+    void replaceOperandValue(const Value *oldVal, const ValuePtr &newVal) override {
+        if (value_.get() == oldVal) value_ = newVal;
+        replaceOperand(oldVal, newVal);
+    }
+
 private:
     ValuePtr value_;
 };
@@ -155,6 +190,7 @@ public:
         : Instruction(ValueType::JumpInstTy, nullptr), target_(std::move(target)) {}
 
     BasicBlockPtr getTarget() const { return target_; }
+    void setTarget(BasicBlockPtr target) { target_ = std::move(target); }
 
 private:
     BasicBlockPtr target_;
@@ -178,6 +214,14 @@ public:
     BasicBlockPtr getTrueBlock() const { return true_; }
     BasicBlockPtr getFalseBlock() const { return false_; }
 
+    void setTrueBlock(BasicBlockPtr target) { true_ = std::move(target); }
+    void setFalseBlock(BasicBlockPtr target) { false_ = std::move(target); }
+
+    void replaceOperandValue(const Value *oldVal, const ValuePtr &newVal) override {
+        if (cond_.get() == oldVal) cond_ = newVal;
+        replaceOperand(oldVal, newVal);
+    }
+
 private:
     ValuePtr cond_;
     BasicBlockPtr true_;
@@ -200,6 +244,11 @@ public:
     }
 
     ValuePtr getOperand() const { return operand_; }
+
+    void replaceOperandValue(const Value *oldVal, const ValuePtr &newVal) override {
+        if (operand_.get() == oldVal) operand_ = newVal;
+        replaceOperand(oldVal, newVal);
+    }
 
 private:
     ValuePtr operand_;

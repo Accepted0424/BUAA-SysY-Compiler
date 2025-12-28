@@ -66,6 +66,8 @@ public:
         return uses_;
     }
 
+    void replaceAllUsesWith(const ValuePtr &newValue);
+
     int getUseCount() const {
         return static_cast<int>(uses_.size());
     }

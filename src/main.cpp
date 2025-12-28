@@ -10,6 +10,7 @@
 #include "llvm/include/asm/MipsPrinter.h"
 #include "llvm/include/ir/llvmContext.h"
 #include "llvm/include/ir/module.h"
+#include "llvm/include/ir/pass/PassManager.h"
 
 // homework 2
 void lex(std::ifstream& file, std::ofstream& out) {
@@ -58,6 +59,10 @@ void generateCode(std::ifstream& file, std::ofstream& irOut, std::ofstream& mips
 
     auto visitor = Visitor(module);
     visitor.visit(*root);
+
+    PassManager pm;
+    addDefaultPasses(pm);
+    pm.run(module);
 
     const AsmPrinter irPrinter(module, irOut);
     irPrinter.print();

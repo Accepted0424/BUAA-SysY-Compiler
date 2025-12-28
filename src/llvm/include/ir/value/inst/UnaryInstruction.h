@@ -20,6 +20,11 @@ protected:
     };
 
     ValuePtr operand_;
+
+    void replaceOperandValue(const Value *oldVal, const ValuePtr &newVal) override {
+        if (operand_.get() == oldVal) operand_ = newVal;
+        replaceOperand(oldVal, newVal);
+    }
 };
 
 enum class UnaryOpType { NOT, NEG, POS };

@@ -1,6 +1,7 @@
 #include "llvm/include/ir/value/Value.h"
 
 #include "llvm/include/ir/value/Use.h"
+#include "llvm/include/ir/value/User.h"
 
 void Value::addUse(User *user) {
     if (!user) {
@@ -20,4 +21,19 @@ void Value::removeUse(User *user) {
             ++it;
         }
     }
+}
+
+void Value::replaceAllUsesWith(const ValuePtr &newValue) {
+    if (newValue.get() == this) {
+        return;
+    }
+    UseList usesCopy = uses_;
+    for (const auto &use : usesCopy) {
+        if (!use) continue;
+        auto *user = use->getUser();
+        if (user) {
+            user->replaceOperandValue(this, newValue);
+        }
+    }
+    uses_.clear();
 }
