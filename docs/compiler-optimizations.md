@@ -53,3 +53,24 @@
 ## 使用与验证建议
 - 变更前后对比 `llvm_ir.txt`、`mips.txt`，确认指令数量与结构变化。
 - 用 `test/` 中的输入样例进行回归，确保语义不变。
+
+## codex-20251228-优化总结
+• 已在 IR 构建与 MIPS lowering 两端做了结构性优化：前端加入常量传播与条件分支直出，后端加入 ABI 传参、栈槽复用、分支比较直出和块内值缓存，整体汇编会更接近 -O2 风格且减少 lw/sw 与
+CFG 膨胀。
+
+改动要点与位置
+
+- 常量折叠/传播与局部 CSE：src/frontend/visitor.cpp 对 LVal 常量直接返回 ConstantInt；新增块内 load 缓存并在 store/call 处失效，减少重复 Load（也让 i*i 之类局部表达式更易共用）。
+  新增结构 loadCaches_ 在 src/frontend/include/visitor.h。
+- 条件控制流简化：src/frontend/visitor.cpp 的 if/for 走新 emitCondBranch（短路分支，不再生成 bool SSA/临时 alloca），减少 CFG 和多余 load/store。
+- 栈槽压缩与复用：src/llvm/MipsPrinter.cpp 在 buildFrameInfo 做线性扫描 last-use，复用 SSA 临时值栈槽；alloca 仍独立保留，区分地址取用变量与临时值。
+- 冗余 load/store 消除：src/llvm/MipsPrinter.cpp 增加 BlockRegCache（块内 value→reg 缓存），loadValue/storeValue 复用缓存并减少重复 lw。
+- 公共子表达式/分支直出：src/llvm/MipsPrinter.cpp 新增 computeSkipInsts 与 emitBranchCompare，当分支条件直接来自 compare 时，直接生成 branch，比起先生成 bool SSA 再分支更紧凑。
+- MIPS ABI：src/llvm/MipsPrinter.cpp 调用约定改为 $a0-$a3 传前四个参数，剩余参数压栈；返回值使用 $v0；内建函数 putint/putch/putstr 直接使用 $a0。
+
+新增/调整的数据结构与 Pass
+
+- Visitor::loadCaches_：块内 load CSE/常量传播辅助缓存（src/frontend/include/visitor.h）。
+- BlockRegCache：块内 value→register 映射，避免重复 lw（src/llvm/MipsPrinter.cpp）。
+- computeSkipInsts + emitBranchCompare：分支 compare 直出，跳过只用于分支的 compare 指令（src/llvm/MipsPrinter.cpp）。
+- buildFrameInfo 线性扫描复用栈槽（src/llvm/MipsPrinter.cpp）。

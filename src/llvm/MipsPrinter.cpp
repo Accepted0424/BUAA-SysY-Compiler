@@ -1,6 +1,7 @@
 #include "include/asm/MipsPrinter.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdint>
 #include <unordered_map>
@@ -79,10 +80,73 @@ bool needsValueSlot(const ValueType vt) {
     }
 }
 
+void collectOperands(const InstructionPtr &inst, std::vector<ValuePtr> &ops) {
+    switch (inst->getValueType()) {
+        case ValueType::BinaryOperatorTy:
+        case ValueType::CompareInstTy:
+        case ValueType::LogicalInstTy: {
+            auto bin = std::static_pointer_cast<BinaryInstruction>(inst);
+            ops.push_back(bin->lhs_);
+            ops.push_back(bin->rhs_);
+            break;
+        }
+        case ValueType::ZExtInstTy: {
+            auto zext = std::static_pointer_cast<ZExtInst>(inst);
+            ops.push_back(zext->getOperand());
+            break;
+        }
+        case ValueType::UnaryOperatorTy: {
+            auto un = std::static_pointer_cast<UnaryOperator>(inst);
+            ops.push_back(un->getOperand());
+            break;
+        }
+        case ValueType::GetElementPtrInstTy: {
+            auto gep = std::static_pointer_cast<GetElementPtrInst>(inst);
+            ops.push_back(gep->getAddressOperand());
+            for (const auto &idx : gep->getIndices()) {
+                ops.push_back(idx);
+            }
+            break;
+        }
+        case ValueType::LoadInstTy: {
+            auto ld = std::static_pointer_cast<LoadInst>(inst);
+            ops.push_back(ld->getAddressOperand());
+            break;
+        }
+        case ValueType::StoreInstTy: {
+            auto st = std::static_pointer_cast<StoreInst>(inst);
+            ops.push_back(st->getValueOperand());
+            ops.push_back(st->getAddressOperand());
+            break;
+        }
+        case ValueType::CallInstTy: {
+            auto call = std::static_pointer_cast<CallInst>(inst);
+            for (const auto &arg : call->getArgs()) {
+                ops.push_back(arg);
+            }
+            break;
+        }
+        case ValueType::ReturnInstTy: {
+            auto ret = std::static_pointer_cast<ReturnInst>(inst);
+            if (ret->getReturnValue()) {
+                ops.push_back(ret->getReturnValue());
+            }
+            break;
+        }
+        case ValueType::BranchInstTy: {
+            auto br = std::static_pointer_cast<BranchInst>(inst);
+            ops.push_back(br->getCondition());
+            break;
+        }
+        default:
+            break;
+    }
+}
+
 class TempRegPool {
 public:
     TempRegPool() {
-        for (int i = 0; i <= 9; ++i) {
+        for (int i = 0; i <= 7; ++i) {
             regs_.push_back("$t" + std::to_string(i));
         }
     }
@@ -118,9 +182,65 @@ struct FrameInfo {
     std::unordered_map<const Value*, int> valueOffsets;
     std::unordered_map<const Value*, int> allocaOffsets;
     std::unordered_map<const Argument*, int> argOffsets;
+    std::unordered_map<const Argument*, int> callerArgOffsets;
     std::unordered_map<const BasicBlock*, std::string> blockLabels;
     RegisterPlan regs;
     int frameSize = 8;  // reserve space for $fp and $ra
+};
+
+struct BlockRegCache {
+    std::array<std::string, 2> regs = {"$t8", "$t9"};
+    std::array<const Value*, 2> values = {nullptr, nullptr};
+    int nextEvict = 0;
+
+    void reset() {
+        values = {nullptr, nullptr};
+        nextEvict = 0;
+    }
+
+    std::string get(const Value *value) const {
+        if (!value) return "";
+        for (size_t i = 0; i < values.size(); ++i) {
+            if (values[i] == value) {
+                return regs[i];
+            }
+        }
+        return "";
+    }
+
+    std::string bind(const Value *value) {
+        if (!value) return "";
+        for (size_t i = 0; i < values.size(); ++i) {
+            if (values[i] == value) {
+                return regs[i];
+            }
+        }
+        for (size_t i = 0; i < values.size(); ++i) {
+            if (values[i] == nullptr) {
+                values[i] = value;
+                return regs[i];
+            }
+        }
+        const int idx = nextEvict;
+        nextEvict = (nextEvict + 1) % static_cast<int>(values.size());
+        values[idx] = value;
+        return regs[idx];
+    }
+
+    void invalidate(const Value *value) {
+        if (!value) return;
+        for (size_t i = 0; i < values.size(); ++i) {
+            if (values[i] == value) {
+                values[i] = nullptr;
+            }
+        }
+    }
+
+    void invalidateAll() {
+        for (auto &v : values) {
+            v = nullptr;
+        }
+    }
 };
 
 }  // namespace
@@ -217,6 +337,27 @@ private:
         return plan;
     }
 
+    std::unordered_set<const Instruction*> computeSkipInsts(const FunctionPtr &func) {
+        std::unordered_set<const Instruction*> skip;
+        for (auto bbIt = func->basicBlockBegin(); bbIt != func->basicBlockEnd(); ++bbIt) {
+            auto bb = *bbIt;
+            for (auto instIt = bb->instructionBegin(); instIt != bb->instructionEnd(); ++instIt) {
+                auto inst = *instIt;
+                if (inst->getValueType() != ValueType::BranchInstTy) {
+                    continue;
+                }
+                auto br = std::static_pointer_cast<BranchInst>(inst);
+                auto condInst = std::dynamic_pointer_cast<Instruction>(br->getCondition());
+                if (!condInst) continue;
+                if (condInst->getValueType() == ValueType::CompareInstTy &&
+                    condInst->getUseCount() == 1) {
+                    skip.insert(condInst.get());
+                }
+            }
+        }
+        return skip;
+    }
+
     void emitNop() {
         out_ << "  nop\n";
     }
@@ -297,7 +438,6 @@ private:
     void emitPutint() {
         const int frameSize = 8;
         emitBuiltinPrologue("putint", frameSize);
-        out_ << "  lw $a0, 0($fp)\n";
         out_ << "  li $v0, 1\n";
         out_ << "  syscall\n";
         emitBuiltinEpilogue(frameSize);
@@ -306,7 +446,6 @@ private:
     void emitPutch() {
         const int frameSize = 8;
         emitBuiltinPrologue("putch", frameSize);
-        out_ << "  lw $a0, 0($fp)\n";
         out_ << "  li $v0, 11\n";
         out_ << "  syscall\n";
         emitBuiltinEpilogue(frameSize);
@@ -315,7 +454,6 @@ private:
     void emitPutstr() {
         const int frameSize = 8;
         emitBuiltinPrologue("putstr", frameSize);
-        out_ << "  lw $a0, 0($fp)\n";
         out_ << "  li $v0, 4\n";
         out_ << "  syscall\n";
         emitBuiltinEpilogue(frameSize);
@@ -325,26 +463,75 @@ private:
         FrameInfo info;
         int nextOffset = 8;  // keep space for $ra and $fp near the top of the frame
 
-        int argIdx = 0;
-        for (const auto &arg : func->getArgs()) {
-            info.argOffsets[arg.get()] = argIdx * 4;
-            ++argIdx;
-        }
-
+        std::vector<InstructionPtr> instList;
         for (auto bbIt = func->basicBlockBegin(); bbIt != func->basicBlockEnd(); ++bbIt) {
             auto bb = *bbIt;
             for (auto instIt = bb->instructionBegin(); instIt != bb->instructionEnd(); ++instIt) {
-                auto inst = *instIt;
-                if (inst->getValueType() == ValueType::AllocaInstTy) {
-                    const int sz = typeSize(inst->getType());
-                    nextOffset += sz;
-                    info.allocaOffsets[inst.get()] = -nextOffset;
-                    continue;
+                instList.push_back(*instIt);
+            }
+        }
+
+        std::unordered_map<const Value*, int> lastUse;
+        for (size_t i = 0; i < instList.size(); ++i) {
+            std::vector<ValuePtr> ops;
+            collectOperands(instList[i], ops);
+            for (const auto &op : ops) {
+                auto opInst = std::dynamic_pointer_cast<Instruction>(op);
+                if (opInst) {
+                    lastUse[opInst.get()] = static_cast<int>(i);
                 }
-                const bool pinned = plan.valueRegs.count(inst.get()) > 0;
-                if (needsValueSlot(inst->getValueType()) && !pinned && inst->getUseCount() > 0) {
+            }
+        }
+
+        for (const auto &inst : instList) {
+            if (inst->getValueType() == ValueType::AllocaInstTy) {
+                const int sz = typeSize(inst->getType());
+                nextOffset += sz;
+                info.allocaOffsets[inst.get()] = -nextOffset;
+            }
+        }
+
+        int argIdx = 0;
+        for (const auto &arg : func->getArgs()) {
+            if (argIdx >= 4) {
+                info.callerArgOffsets[arg.get()] = (argIdx - 4) * 4;
+            }
+            if (argIdx < 4 && plan.valueRegs.count(arg.get()) == 0 && arg->getUseCount() > 0) {
+                nextOffset += 4;
+                info.argOffsets[arg.get()] = -nextOffset;
+            }
+            ++argIdx;
+        }
+
+        std::vector<int> freeSlots;
+        std::vector<std::vector<const Value*>> releaseAt(instList.size());
+        for (const auto &kv : lastUse) {
+            if (kv.second >= 0) {
+                releaseAt[kv.second].push_back(kv.first);
+            }
+        }
+
+        for (size_t i = 0; i < instList.size(); ++i) {
+            auto inst = instList[i];
+            if (inst->getValueType() == ValueType::AllocaInstTy) {
+                continue;
+            }
+            const bool pinned = plan.valueRegs.count(inst.get()) > 0;
+            if (needsValueSlot(inst->getValueType()) && !pinned && inst->getUseCount() > 0) {
+                int offset = 0;
+                if (!freeSlots.empty()) {
+                    offset = freeSlots.back();
+                    freeSlots.pop_back();
+                } else {
                     nextOffset += 4;
-                    info.valueOffsets[inst.get()] = -nextOffset;
+                    offset = -nextOffset;
+                }
+                info.valueOffsets[inst.get()] = offset;
+            }
+            for (const auto *val : releaseAt[i]) {
+                auto it = info.valueOffsets.find(val);
+                if (it != info.valueOffsets.end()) {
+                    freeSlots.push_back(it->second);
                 }
             }
         }
@@ -384,6 +571,7 @@ private:
         const auto funcName = sanitizeName(func->getName());
         auto regPlan = planRegisters(func);
         FrameInfo frame = buildFrameInfo(func, funcName, regPlan);
+        auto skipInsts = computeSkipInsts(func);
         const std::string retLabel = funcName + "_ret";
 
         out_ << "\n" << funcName << ":\n";
@@ -395,20 +583,33 @@ private:
             const int offset = frame.regs.calleeSavedOffsets.at(reg);
             out_ << "  sw " << reg << ", " << offset << "($sp)\n";
         }
-        // seed callee-saved registers for frequently used arguments
+        // seed callee-saved registers / home slots for arguments
+        int argIdx = 0;
         for (const auto &arg : func->getArgs()) {
             auto it = frame.regs.valueRegs.find(arg.get());
             if (it != frame.regs.valueRegs.end()) {
-                const int offset = frame.argOffsets[arg.get()];
-                out_ << "  lw " << it->second << ", " << offset << "($fp)\n";
+                if (argIdx < 4) {
+                    out_ << "  move " << it->second << ", $a" << argIdx << "\n";
+                } else {
+                    const int offset = frame.callerArgOffsets.at(arg.get());
+                    out_ << "  lw " << it->second << ", " << offset << "($fp)\n";
+                }
+            } else if (argIdx < 4) {
+                auto offIt = frame.argOffsets.find(arg.get());
+                if (offIt != frame.argOffsets.end()) {
+                    out_ << "  sw $a" << argIdx << ", " << offIt->second << "($fp)\n";
+                }
             }
+            ++argIdx;
         }
 
         for (auto bbIt = func->basicBlockBegin(); bbIt != func->basicBlockEnd(); ++bbIt) {
             auto bb = *bbIt;
+            BlockRegCache cache;
+            cache.reset();
             out_ << frame.blockLabels[bb.get()] << ":\n";
             for (auto instIt = bb->instructionBegin(); instIt != bb->instructionEnd(); ++instIt) {
-                emitInstruction(*instIt, frame, retLabel);
+                emitInstruction(*instIt, frame, retLabel, cache, skipInsts);
             }
         }
 
@@ -424,45 +625,49 @@ private:
         emitNop();
     }
 
-    void emitInstruction(const InstructionPtr &inst, const FrameInfo &frame, const std::string &retLabel) {
+    void emitInstruction(const InstructionPtr &inst, const FrameInfo &frame, const std::string &retLabel,
+        BlockRegCache &cache, const std::unordered_set<const Instruction*> &skipInsts) {
+        if (skipInsts.count(inst.get()) > 0) {
+            return;
+        }
         switch (inst->getValueType()) {
             case ValueType::AllocaInstTy:
                 break;
             case ValueType::StoreInstTy:
-                emitStore(std::static_pointer_cast<StoreInst>(inst), frame);
+                emitStore(std::static_pointer_cast<StoreInst>(inst), frame, cache);
                 break;
             case ValueType::LoadInstTy:
-                emitLoad(std::static_pointer_cast<LoadInst>(inst), frame);
+                emitLoad(std::static_pointer_cast<LoadInst>(inst), frame, cache);
                 break;
             case ValueType::BinaryOperatorTy:
-                emitBinary(std::static_pointer_cast<BinaryOperator>(inst), frame);
+                emitBinary(std::static_pointer_cast<BinaryOperator>(inst), frame, cache);
                 break;
             case ValueType::CompareInstTy:
-                emitCompare(std::static_pointer_cast<CompareOperator>(inst), frame);
+                emitCompare(std::static_pointer_cast<CompareOperator>(inst), frame, cache);
                 break;
             case ValueType::LogicalInstTy:
-                emitLogical(std::static_pointer_cast<LogicalOperator>(inst), frame);
+                emitLogical(std::static_pointer_cast<LogicalOperator>(inst), frame, cache);
                 break;
             case ValueType::ZExtInstTy:
-                emitZExt(std::static_pointer_cast<ZExtInst>(inst), frame);
+                emitZExt(std::static_pointer_cast<ZExtInst>(inst), frame, cache);
                 break;
             case ValueType::UnaryOperatorTy:
-                emitUnary(std::static_pointer_cast<UnaryOperator>(inst), frame);
+                emitUnary(std::static_pointer_cast<UnaryOperator>(inst), frame, cache);
                 break;
             case ValueType::CallInstTy:
-                emitCall(std::static_pointer_cast<CallInst>(inst), frame);
+                emitCall(std::static_pointer_cast<CallInst>(inst), frame, cache);
                 break;
             case ValueType::GetElementPtrInstTy:
-                emitGEP(std::static_pointer_cast<GetElementPtrInst>(inst), frame);
+                emitGEP(std::static_pointer_cast<GetElementPtrInst>(inst), frame, cache);
                 break;
             case ValueType::ReturnInstTy:
-                emitReturn(std::static_pointer_cast<ReturnInst>(inst), frame, retLabel);
+                emitReturn(std::static_pointer_cast<ReturnInst>(inst), frame, retLabel, cache);
                 break;
             case ValueType::JumpInstTy:
                 emitJump(std::static_pointer_cast<JumpInst>(inst), frame);
                 break;
             case ValueType::BranchInstTy:
-                emitBranch(std::static_pointer_cast<BranchInst>(inst), frame);
+                emitBranch(std::static_pointer_cast<BranchInst>(inst), frame, cache);
                 break;
             default:
                 out_ << "  # unsupported instruction\n";
@@ -503,7 +708,7 @@ private:
         }
     }
 
-    void loadValue(const ValuePtr &value, const FrameInfo &frame, const std::string &reg) {
+    void loadValue(const ValuePtr &value, const FrameInfo &frame, const std::string &reg, BlockRegCache &cache) {
         if (!value) {
             out_ << "  li " << reg << ", 0\n";
             return;
@@ -517,6 +722,15 @@ private:
             return;
         }
 
+        const auto cached = cache.get(value.get());
+        if (!cached.empty()) {
+            if (cached != reg) {
+                out_ << "  move " << reg << ", " << cached << "\n";
+            }
+            return;
+        }
+
+        bool loaded = false;
         switch (value->getValueType()) {
             case ValueType::ConstantIntTy: {
                 auto ci = std::static_pointer_cast<ConstantInt>(value);
@@ -528,9 +742,16 @@ private:
                 auto it = frame.argOffsets.find(arg.get());
                 if (it != frame.argOffsets.end()) {
                     out_ << "  lw " << reg << ", " << it->second << "($fp)\n";
-                } else {
-                    out_ << "  li " << reg << ", 0\n";
+                    loaded = true;
+                    break;
                 }
+                auto callerIt = frame.callerArgOffsets.find(arg.get());
+                if (callerIt != frame.callerArgOffsets.end()) {
+                    out_ << "  lw " << reg << ", " << callerIt->second << "($fp)\n";
+                    loaded = true;
+                    break;
+                }
+                out_ << "  li " << reg << ", 0\n";
                 return;
             }
             case ValueType::GlobalVariableTy: {
@@ -538,26 +759,41 @@ private:
                 const auto label = sanitizeName(gv->getName());
                 out_ << "  la " << reg << ", " << label << "\n";
                 out_ << "  lw " << reg << ", 0(" << reg << ")\n";
-                return;
+                loaded = true;
+                break;
             }
             case ValueType::AllocaInstTy: {
                 auto it = frame.allocaOffsets.find(value.get());
                 if (it != frame.allocaOffsets.end()) {
                     out_ << "  lw " << reg << ", " << it->second << "($fp)\n";
-                } else {
-                    out_ << "  li " << reg << ", 0\n";
+                    loaded = true;
+                    break;
                 }
+                out_ << "  li " << reg << ", 0\n";
                 return;
             }
             default:
                 break;
         }
 
-        auto it = frame.valueOffsets.find(value.get());
-        if (it != frame.valueOffsets.end()) {
-            out_ << "  lw " << reg << ", " << it->second << "($fp)\n";
-        } else {
-            out_ << "  li " << reg << ", 0\n";
+        if (!loaded) {
+            auto it = frame.valueOffsets.find(value.get());
+            if (it != frame.valueOffsets.end()) {
+                out_ << "  lw " << reg << ", " << it->second << "($fp)\n";
+                loaded = true;
+            } else {
+                out_ << "  li " << reg << ", 0\n";
+                return;
+            }
+        }
+
+        if (value->getValueType() != ValueType::ConstantIntTy &&
+            regForValue(value, frame).empty() &&
+            value->getUseCount() > 1) {
+            auto cacheReg = cache.bind(value.get());
+            if (!cacheReg.empty() && cacheReg != reg) {
+                out_ << "  move " << cacheReg << ", " << reg << "\n";
+            }
         }
     }
 
@@ -606,9 +842,14 @@ private:
                 auto it = frame.argOffsets.find(arg.get());
                 if (it != frame.argOffsets.end()) {
                     out_ << "  lw " << reg << ", " << it->second << "($fp)\n";
-                } else {
-                    out_ << "  move " << reg << ", $zero\n";
+                    return;
                 }
+                auto callerIt = frame.callerArgOffsets.find(arg.get());
+                if (callerIt != frame.callerArgOffsets.end()) {
+                    out_ << "  lw " << reg << ", " << callerIt->second << "($fp)\n";
+                    return;
+                }
+                out_ << "  move " << reg << ", $zero\n";
                 return;
             }
             default:
@@ -617,37 +858,43 @@ private:
         }
     }
 
-    void storeValue(const ValuePtr &value, const FrameInfo &frame, const std::string &reg) {
+    void storeValue(const ValuePtr &value, const FrameInfo &frame, const std::string &reg, BlockRegCache &cache) {
         if (!value || value->getUseCount() == 0) {
             return;
         }
         auto it = frame.valueOffsets.find(value.get());
         if (it != frame.valueOffsets.end()) {
             out_ << "  sw " << reg << ", " << it->second << "($fp)\n";
+            if (regForValue(value, frame).empty() && value->getUseCount() > 1) {
+                auto cacheReg = cache.bind(value.get());
+                if (!cacheReg.empty() && cacheReg != reg) {
+                    out_ << "  move " << cacheReg << ", " << reg << "\n";
+                }
+            }
         }
     }
 
-    void emitStore(const std::shared_ptr<StoreInst> &inst, const FrameInfo &frame) {
+    void emitStore(const std::shared_ptr<StoreInst> &inst, const FrameInfo &frame, BlockRegCache &cache) {
         auto valReg = temps_.acquire();
         auto addrReg = temps_.acquire();
-        loadValue(inst->getValueOperand(), frame, valReg);
+        loadValue(inst->getValueOperand(), frame, valReg, cache);
         loadAddress(inst->getAddressOperand(), frame, addrReg);
         out_ << "  sw " << valReg << ", 0(" << addrReg << ")\n";
         temps_.release(valReg);
         temps_.release(addrReg);
     }
 
-    void emitLoad(const std::shared_ptr<LoadInst> &inst, const FrameInfo &frame) {
+    void emitLoad(const std::shared_ptr<LoadInst> &inst, const FrameInfo &frame, BlockRegCache &cache) {
         auto addrReg = temps_.acquire();
         auto dst = acquireTargetReg(inst, frame);
         loadAddress(inst->getAddressOperand(), frame, addrReg);
         out_ << "  lw " << dst.name << ", 0(" << addrReg << ")\n";
-        storeValue(inst, frame, dst.name);
+        storeValue(inst, frame, dst.name, cache);
         temps_.release(addrReg);
         releaseTarget(dst);
     }
 
-    void emitBinary(const std::shared_ptr<BinaryOperator> &inst, const FrameInfo &frame) {
+    void emitBinary(const std::shared_ptr<BinaryOperator> &inst, const FrameInfo &frame, BlockRegCache &cache) {
         auto isConstInt = [](const ValuePtr &value, int &out) -> bool {
             if (value && value->getValueType() == ValueType::ConstantIntTy) {
                 out = std::static_pointer_cast<ConstantInt>(value)->getValue();
@@ -667,36 +914,36 @@ private:
 
         if (inst->OpType() == BinaryOpType::ADD && rhsIsImm && fitsImm16(rhsImm)) {
             auto lhsReg = temps_.acquire();
-            loadValue(inst->lhs_, frame, lhsReg);
+            loadValue(inst->lhs_, frame, lhsReg, cache);
             out_ << "  addiu " << dst.name << ", " << lhsReg << ", " << rhsImm << "\n";
             temps_.release(lhsReg);
-            storeValue(inst, frame, dst.name);
+            storeValue(inst, frame, dst.name, cache);
             releaseTarget(dst);
             return;
         }
         if (inst->OpType() == BinaryOpType::ADD && lhsIsImm && fitsImm16(lhsImm)) {
             auto rhsReg = temps_.acquire();
-            loadValue(inst->rhs_, frame, rhsReg);
+            loadValue(inst->rhs_, frame, rhsReg, cache);
             out_ << "  addiu " << dst.name << ", " << rhsReg << ", " << lhsImm << "\n";
             temps_.release(rhsReg);
-            storeValue(inst, frame, dst.name);
+            storeValue(inst, frame, dst.name, cache);
             releaseTarget(dst);
             return;
         }
         if (inst->OpType() == BinaryOpType::SUB && rhsIsImm && fitsImm16(-rhsImm)) {
             auto lhsReg = temps_.acquire();
-            loadValue(inst->lhs_, frame, lhsReg);
+            loadValue(inst->lhs_, frame, lhsReg, cache);
             out_ << "  addiu " << dst.name << ", " << lhsReg << ", " << -rhsImm << "\n";
             temps_.release(lhsReg);
-            storeValue(inst, frame, dst.name);
+            storeValue(inst, frame, dst.name, cache);
             releaseTarget(dst);
             return;
         }
 
         auto lhsReg = temps_.acquire();
         auto rhsReg = temps_.acquire();
-        loadValue(inst->lhs_, frame, lhsReg);
-        loadValue(inst->rhs_, frame, rhsReg);
+        loadValue(inst->lhs_, frame, lhsReg, cache);
+        loadValue(inst->rhs_, frame, rhsReg, cache);
         switch (inst->OpType()) {
             case BinaryOpType::ADD:
                 out_ << "  addu " << dst.name << ", " << lhsReg << ", " << rhsReg << "\n";
@@ -716,13 +963,13 @@ private:
                 out_ << "  mfhi " << dst.name << "\n";
                 break;
         }
-        storeValue(inst, frame, dst.name);
+        storeValue(inst, frame, dst.name, cache);
         temps_.release(lhsReg);
         temps_.release(rhsReg);
         releaseTarget(dst);
     }
 
-    void emitCompare(const std::shared_ptr<CompareOperator> &inst, const FrameInfo &frame) {
+    void emitCompare(const std::shared_ptr<CompareOperator> &inst, const FrameInfo &frame, BlockRegCache &cache) {
         auto isConstInt = [](const ValuePtr &value, int &out) -> bool {
             if (value && value->getValueType() == ValueType::ConstantIntTy) {
                 out = std::static_pointer_cast<ConstantInt>(value)->getValue();
@@ -734,7 +981,7 @@ private:
         const bool rhsIsZero = isConstInt(inst->getRhs(), rhsImm) && rhsImm == 0;
 
         auto lhsReg = temps_.acquire();
-        loadValue(inst->getLhs(), frame, lhsReg);
+        loadValue(inst->getLhs(), frame, lhsReg, cache);
         auto dst = acquireTargetReg(inst, frame);
         if (rhsIsZero && inst->OpType() == CompareOpType::EQL) {
             out_ << "  sltiu " << dst.name << ", " << lhsReg << ", 1\n";
@@ -742,7 +989,7 @@ private:
             out_ << "  sltu " << dst.name << ", $zero, " << lhsReg << "\n";
         } else {
             auto rhsReg = temps_.acquire();
-            loadValue(inst->getRhs(), frame, rhsReg);
+            loadValue(inst->getRhs(), frame, rhsReg, cache);
             switch (inst->OpType()) {
                 case CompareOpType::EQL:
                     out_ << "  xor " << dst.name << ", " << lhsReg << ", " << rhsReg << "\n";
@@ -769,17 +1016,87 @@ private:
             }
             temps_.release(rhsReg);
         }
-        storeValue(inst, frame, dst.name);
+        storeValue(inst, frame, dst.name, cache);
         temps_.release(lhsReg);
         releaseTarget(dst);
     }
 
-    void emitLogical(const std::shared_ptr<LogicalOperator> &inst, const FrameInfo &frame) {
+    void emitBranchCompare(const std::shared_ptr<CompareOperator> &cmp, const FrameInfo &frame,
+        BlockRegCache &cache, const std::string &tLabel, const std::string &fLabel) {
+        auto isConstInt = [](const ValuePtr &value, int &out) -> bool {
+            if (value && value->getValueType() == ValueType::ConstantIntTy) {
+                out = std::static_pointer_cast<ConstantInt>(value)->getValue();
+                return true;
+            }
+            return false;
+        };
+
+        int rhsImm = 0;
+        const bool rhsIsImm = isConstInt(cmp->getRhs(), rhsImm);
+        auto lhsReg = temps_.acquire();
+        loadValue(cmp->getLhs(), frame, lhsReg, cache);
+
+        auto rhsReg = temps_.acquire();
+        if (rhsIsImm) {
+            out_ << "  li " << rhsReg << ", " << rhsImm << "\n";
+        } else {
+            loadValue(cmp->getRhs(), frame, rhsReg, cache);
+        }
+
+        auto tmpReg = temps_.acquire();
+        switch (cmp->OpType()) {
+            case CompareOpType::EQL:
+                out_ << "  beq " << lhsReg << ", " << rhsReg << ", " << tLabel << "\n";
+                emitNop();
+                out_ << "  j " << fLabel << "\n";
+                emitNop();
+                break;
+            case CompareOpType::NEQ:
+                out_ << "  bne " << lhsReg << ", " << rhsReg << ", " << tLabel << "\n";
+                emitNop();
+                out_ << "  j " << fLabel << "\n";
+                emitNop();
+                break;
+            case CompareOpType::LSS:
+                out_ << "  slt " << tmpReg << ", " << lhsReg << ", " << rhsReg << "\n";
+                out_ << "  bne " << tmpReg << ", $zero, " << tLabel << "\n";
+                emitNop();
+                out_ << "  j " << fLabel << "\n";
+                emitNop();
+                break;
+            case CompareOpType::GRE:
+                out_ << "  slt " << tmpReg << ", " << rhsReg << ", " << lhsReg << "\n";
+                out_ << "  bne " << tmpReg << ", $zero, " << tLabel << "\n";
+                emitNop();
+                out_ << "  j " << fLabel << "\n";
+                emitNop();
+                break;
+            case CompareOpType::LEQ:
+                out_ << "  slt " << tmpReg << ", " << rhsReg << ", " << lhsReg << "\n";
+                out_ << "  beq " << tmpReg << ", $zero, " << tLabel << "\n";
+                emitNop();
+                out_ << "  j " << fLabel << "\n";
+                emitNop();
+                break;
+            case CompareOpType::GEQ:
+                out_ << "  slt " << tmpReg << ", " << lhsReg << ", " << rhsReg << "\n";
+                out_ << "  beq " << tmpReg << ", $zero, " << tLabel << "\n";
+                emitNop();
+                out_ << "  j " << fLabel << "\n";
+                emitNop();
+                break;
+        }
+        temps_.release(tmpReg);
+        temps_.release(lhsReg);
+        temps_.release(rhsReg);
+    }
+
+    void emitLogical(const std::shared_ptr<LogicalOperator> &inst, const FrameInfo &frame, BlockRegCache &cache) {
         auto lhsReg = temps_.acquire();
         auto rhsReg = temps_.acquire();
-        loadValue(inst->getLhs(), frame, lhsReg);
+        loadValue(inst->getLhs(), frame, lhsReg, cache);
         out_ << "  sltu " << lhsReg << ", $zero, " << lhsReg << "\n";
-        loadValue(inst->getRhs(), frame, rhsReg);
+        loadValue(inst->getRhs(), frame, rhsReg, cache);
         out_ << "  sltu " << rhsReg << ", $zero, " << rhsReg << "\n";
         auto dst = acquireTargetReg(inst, frame);
         if (inst->OpType() == LogicalOpType::AND) {
@@ -787,25 +1104,25 @@ private:
         } else {
             out_ << "  or " << dst.name << ", " << lhsReg << ", " << rhsReg << "\n";
         }
-        storeValue(inst, frame, dst.name);
+        storeValue(inst, frame, dst.name, cache);
         temps_.release(lhsReg);
         temps_.release(rhsReg);
         releaseTarget(dst);
     }
 
-    void emitZExt(const std::shared_ptr<ZExtInst> &inst, const FrameInfo &frame) {
+    void emitZExt(const std::shared_ptr<ZExtInst> &inst, const FrameInfo &frame, BlockRegCache &cache) {
         auto srcReg = temps_.acquire();
-        loadValue(inst->getOperand(), frame, srcReg);
+        loadValue(inst->getOperand(), frame, srcReg, cache);
         auto dst = acquireTargetReg(inst, frame);
         out_ << "  sltu " << dst.name << ", $zero, " << srcReg << "\n";
-        storeValue(inst, frame, dst.name);
+        storeValue(inst, frame, dst.name, cache);
         temps_.release(srcReg);
         releaseTarget(dst);
     }
 
-    void emitUnary(const std::shared_ptr<UnaryOperator> &inst, const FrameInfo &frame) {
+    void emitUnary(const std::shared_ptr<UnaryOperator> &inst, const FrameInfo &frame, BlockRegCache &cache) {
         auto opReg = temps_.acquire();
-        loadValue(inst->getOperand(), frame, opReg);
+        loadValue(inst->getOperand(), frame, opReg, cache);
         auto dst = acquireTargetReg(inst, frame);
         switch (inst->OpType()) {
             case UnaryOpType::POS:
@@ -818,45 +1135,55 @@ private:
                 out_ << "  sltiu " << dst.name << ", " << opReg << ", 1\n";
                 break;
         }
-        storeValue(inst, frame, dst.name);
+        storeValue(inst, frame, dst.name, cache);
         temps_.release(opReg);
         releaseTarget(dst);
     }
 
-    void emitCall(const std::shared_ptr<CallInst> &inst, const FrameInfo &frame) {
+    void emitCall(const std::shared_ptr<CallInst> &inst, const FrameInfo &frame, BlockRegCache &cache) {
         const auto funcName = sanitizeName(inst->getFunction()->getName());
         const auto &args = inst->getArgs();
-        // push arguments in reverse order
-        for (auto it = args.rbegin(); it != args.rend(); ++it) {
-            auto arg = *it;
+        const int argCount = static_cast<int>(args.size());
+        for (int i = argCount - 1; i >= 4; --i) {
+            auto arg = args[i];
             const bool isPointer = arg && arg->getType() && arg->getType()->is(Type::ArrayTyID);
             auto argReg = temps_.acquire();
             if (isPointer) {
                 loadAddress(arg, frame, argReg);
             } else {
-                loadValue(arg, frame, argReg);
+                loadValue(arg, frame, argReg, cache);
             }
             out_ << "  addi $sp, $sp, -4\n";
             out_ << "  sw " << argReg << ", 0($sp)\n";
             temps_.release(argReg);
         }
+        for (int i = 0; i < argCount && i < 4; ++i) {
+            auto arg = args[i];
+            const bool isPointer = arg && arg->getType() && arg->getType()->is(Type::ArrayTyID);
+            if (isPointer) {
+                loadAddress(arg, frame, "$a" + std::to_string(i));
+            } else {
+                loadValue(arg, frame, "$a" + std::to_string(i), cache);
+            }
+        }
         out_ << "  jal " << funcName << "\n";
         emitNop();
-        if (!args.empty()) {
-            out_ << "  addi $sp, $sp, " << static_cast<int>(args.size()) * 4 << "\n";
+        if (argCount > 4) {
+            out_ << "  addi $sp, $sp, " << (argCount - 4) * 4 << "\n";
         }
+        cache.invalidateAll();
         const bool hasRet = inst->getType() && !inst->getType()->is(Type::VoidTyID);
         if (hasRet) {
             auto dst = acquireTargetReg(inst, frame);
             if (dst.name != "$v0") {
                 out_ << "  move " << dst.name << ", $v0\n";
             }
-            storeValue(inst, frame, dst.name);
+            storeValue(inst, frame, dst.name, cache);
             releaseTarget(dst);
         }
     }
 
-    void emitGEP(const std::shared_ptr<GetElementPtrInst> &inst, const FrameInfo &frame) {
+    void emitGEP(const std::shared_ptr<GetElementPtrInst> &inst, const FrameInfo &frame, BlockRegCache &cache) {
         auto baseReg = temps_.acquire();
         loadAddress(inst->getAddressOperand(), frame, baseReg);
         int immOffset = 0;
@@ -871,7 +1198,7 @@ private:
                 immOffset += ci->getValue() * stride;
             } else {
                 auto idxReg = temps_.acquire();
-                loadValue(idx, frame, idxReg);
+                loadValue(idx, frame, idxReg, cache);
                 if (stride == 1) {
                     out_ << "  move " << idxReg << ", " << idxReg << "\n";
                 } else if ((stride & (stride - 1)) == 0) {
@@ -914,14 +1241,15 @@ private:
         if (dst.name != baseReg) {
             out_ << "  move " << dst.name << ", " << baseReg << "\n";
         }
-        storeValue(inst, frame, dst.name);
+        storeValue(inst, frame, dst.name, cache);
         releaseTarget(dst);
         temps_.release(baseReg);
     }
 
-    void emitReturn(const std::shared_ptr<ReturnInst> &inst, const FrameInfo &frame, const std::string &retLabel) {
+    void emitReturn(const std::shared_ptr<ReturnInst> &inst, const FrameInfo &frame, const std::string &retLabel,
+        BlockRegCache &cache) {
         if (inst->getReturnValue()) {
-            loadValue(inst->getReturnValue(), frame, "$v0");
+            loadValue(inst->getReturnValue(), frame, "$v0", cache);
         }
         out_ << "  j " << retLabel << "\n";
         emitNop();
@@ -933,11 +1261,23 @@ private:
         emitNop();
     }
 
-    void emitBranch(const std::shared_ptr<BranchInst> &inst, const FrameInfo &frame) {
-        auto condReg = temps_.acquire();
-        loadValue(inst->getCondition(), frame, condReg);
+    void emitBranch(const std::shared_ptr<BranchInst> &inst, const FrameInfo &frame, BlockRegCache &cache) {
         auto tLabel = frame.blockLabels.at(inst->getTrueBlock().get());
         auto fLabel = frame.blockLabels.at(inst->getFalseBlock().get());
+        auto cond = inst->getCondition();
+        if (cond && cond->getValueType() == ValueType::ConstantIntTy) {
+            auto ci = std::static_pointer_cast<ConstantInt>(cond);
+            out_ << "  j " << (ci->getValue() != 0 ? tLabel : fLabel) << "\n";
+            emitNop();
+            return;
+        }
+        auto cmp = std::dynamic_pointer_cast<CompareOperator>(cond);
+        if (cmp) {
+            emitBranchCompare(cmp, frame, cache, tLabel, fLabel);
+            return;
+        }
+        auto condReg = temps_.acquire();
+        loadValue(cond, frame, condReg, cache);
         out_ << "  bne " << condReg << ", $zero, " << tLabel << "\n";
         emitNop();
         out_ << "  j " << fLabel << "\n";

@@ -64,6 +64,9 @@ private:
     void insertInst(const InstructionPtr &inst, bool toEntry = false);
     void runDCE(const FunctionPtr &func);
 
+    void invalidateLoadCache(const ValuePtr &address);
+    void clearLoadCache();
+
     BasicBlockPtr newBlock(const std::string &hint);
 
     FunctionPtr visitFuncDef(const FuncDef &node);
@@ -98,6 +101,11 @@ private:
 
     ValuePtr visitCond(const Cond &cond);
 
+    void emitCondBranch(const Cond &cond, const BasicBlockPtr &trueBB, const BasicBlockPtr &falseBB);
+    void emitLOrBranch(const LOrExp &lOrExp, const BasicBlockPtr &trueBB, const BasicBlockPtr &falseBB);
+    void emitLAndBranch(const LAndExp &lAndExp, const BasicBlockPtr &trueBB, const BasicBlockPtr &falseBB);
+    void emitEqBranch(const EqExp &eqExp, const BasicBlockPtr &trueBB, const BasicBlockPtr &falseBB);
+
     void visitForStmt(const ForStmt &forStmt);
 
     bool visitStmt(const Stmt &stmt);
@@ -119,4 +127,5 @@ private:
     CseResult reuseGEP(TypePtr elementType, ValuePtr address, const std::vector<ValuePtr> &indices);
 
     std::unordered_map<BasicBlock*, std::unordered_map<std::string, ValuePtr>> cseTables_;
+    std::unordered_map<BasicBlock*, std::unordered_map<const Value*, ValuePtr>> loadCaches_;
 };

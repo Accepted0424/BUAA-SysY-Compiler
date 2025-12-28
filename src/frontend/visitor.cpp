@@ -139,10 +139,22 @@ void Visitor::insertInst(const InstructionPtr &inst, bool toEntry) {
             }
         }
         entry_block_->insertInstruction(it, inst);
+        if (inst && inst->getValueType() == ValueType::StoreInstTy) {
+            auto st = std::static_pointer_cast<StoreInst>(inst);
+            invalidateLoadCache(st->getAddressOperand());
+        } else if (inst && inst->getValueType() == ValueType::CallInstTy) {
+            clearLoadCache();
+        }
         return;
     }
     if (cur_block_ != nullptr) {
         cur_block_->insertInstruction(inst);
+        if (inst && inst->getValueType() == ValueType::StoreInstTy) {
+            auto st = std::static_pointer_cast<StoreInst>(inst);
+            invalidateLoadCache(st->getAddressOperand());
+        } else if (inst && inst->getValueType() == ValueType::CallInstTy) {
+            clearLoadCache();
+        }
     }
 }
 
@@ -346,6 +358,17 @@ void Visitor::runDCE(const FunctionPtr &func) {
     }
 }
 
+void Visitor::invalidateLoadCache(const ValuePtr &address) {
+    if (!cur_block_ || !address) return;
+    auto &cache = loadCaches_[cur_block_.get()];
+    cache.erase(address.get());
+}
+
+void Visitor::clearLoadCache() {
+    if (!cur_block_) return;
+    loadCaches_[cur_block_.get()].clear();
+}
+
 BasicBlockPtr Visitor::newBlock(const std::string &hint) {
     auto bb = BasicBlock::create(cur_func_);
     std::string name = hint;
@@ -370,8 +393,18 @@ ValuePtr Visitor::loadIfPointer(const ValuePtr &value) {
         case ValueType::AllocaInstTy:
         case ValueType::GlobalVariableTy:
         case ValueType::GetElementPtrInstTy: {
+            if (cur_block_ != nullptr) {
+                auto &cache = loadCaches_[cur_block_.get()];
+                auto it = cache.find(value.get());
+                if (it != cache.end()) {
+                    return it->second;
+                }
+            }
             auto load = LoadInst::create(ir_module_.getContext()->getIntegerTy(), value);
             insertInst(load);
+            if (cur_block_ != nullptr) {
+                loadCaches_[cur_block_.get()][value.get()] = load;
+            }
             return load;
         }
         default:
@@ -596,6 +629,11 @@ ValuePtr Visitor::visitPrimaryExp(const PrimaryExp &primaryExp) {
             return visitExp(*primaryExp.exp);
 
         case PrimaryExp::LVAL: {
+            if (primaryExp.lval) {
+                if (auto constVal = constValueOfLVal(*primaryExp.lval)) {
+                    return ConstantInt::create(ir_module_.getContext()->getIntegerTy(), *constVal);
+                }
+            }
             auto addr = getLValAddress(*primaryExp.lval);
             return loadIfPointer(addr);
         }
@@ -1176,6 +1214,39 @@ ValuePtr Visitor::visitCond(const Cond &cond) {
     return visitLOrExp(*cond.lOrExp);
 }
 
+void Visitor::emitCondBranch(const Cond &cond, const BasicBlockPtr &trueBB, const BasicBlockPtr &falseBB) {
+    emitLOrBranch(*cond.lOrExp, trueBB, falseBB);
+}
+
+void Visitor::emitLOrBranch(const LOrExp &lOrExp, const BasicBlockPtr &trueBB, const BasicBlockPtr &falseBB) {
+    for (size_t i = 0; i < lOrExp.lAndExps.size(); ++i) {
+        const bool isLast = (i + 1 == lOrExp.lAndExps.size());
+        auto next = isLast ? falseBB : newBlock("lor.next");
+        emitLAndBranch(*lOrExp.lAndExps[i], trueBB, next);
+    }
+}
+
+void Visitor::emitLAndBranch(const LAndExp &lAndExp, const BasicBlockPtr &trueBB, const BasicBlockPtr &falseBB) {
+    for (size_t i = 0; i < lAndExp.eqExps.size(); ++i) {
+        const bool isLast = (i + 1 == lAndExp.eqExps.size());
+        auto next = isLast ? trueBB : newBlock("land.next");
+        emitEqBranch(*lAndExp.eqExps[i], next, falseBB);
+        if (!isLast) {
+            cur_block_ = next;
+        }
+    }
+    cur_block_ = falseBB;
+}
+
+void Visitor::emitEqBranch(const EqExp &eqExp, const BasicBlockPtr &trueBB, const BasicBlockPtr &falseBB) {
+    auto condVal = visitEqExp(eqExp);
+    if (auto ci = asConstInt(condVal)) {
+        insertInst(JumpInst::create(ci->getValue() != 0 ? trueBB : falseBB));
+        return;
+    }
+    insertInst(BranchInst::create(condVal, trueBB, falseBB));
+}
+
 void Visitor::visitForStmt(const ForStmt &forStmt) {
     for (const auto &[lVal, exp] : forStmt.assigns) {
         if (!cur_scope_->existInSymTable(lVal->ident->content)) {
@@ -1224,11 +1295,10 @@ bool Visitor::visitStmt(const Stmt &stmt) {
             break;
         case Stmt::IF:
             if (stmt.ifStmt.cond != nullptr) {
-                auto condVal = toBool(visitCond(*stmt.ifStmt.cond));
                 auto thenBB = newBlock("if.then");
                 auto endBB = newBlock("if.end");
                 BasicBlockPtr elseBB = stmt.ifStmt.elseStmt ? newBlock("if.else") : endBB;
-                insertInst(BranchInst::create(condVal, thenBB, elseBB));
+                emitCondBranch(*stmt.ifStmt.cond, thenBB, elseBB);
 
                 cur_block_ = thenBB;
                 bool thenReturn = visitStmt(*stmt.ifStmt.thenStmt);
@@ -1261,8 +1331,11 @@ bool Visitor::visitStmt(const Stmt &stmt) {
                 insertInst(JumpInst::create(condBB));
                 cur_block_ = condBB;
 
-                ValuePtr condVal = stmt.forStmt.cond ? toBool(visitCond(*stmt.forStmt.cond)) : makeConst(ir_module_.getContext(), 1);
-                insertInst(BranchInst::create(condVal, bodyBB, endBB));
+                if (stmt.forStmt.cond) {
+                    emitCondBranch(*stmt.forStmt.cond, bodyBB, endBB);
+                } else {
+                    insertInst(JumpInst::create(bodyBB));
+                }
 
                 breakTargets_.push_back(endBB);
                 continueTargets_.push_back(stepBB);
