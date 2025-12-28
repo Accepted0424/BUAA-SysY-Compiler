@@ -2,21 +2,12 @@
 
 #include "llvm/include/ir/value/User.h"
 #include "llvm/include/ir/IrForward.h"
-#include <vector>
 
 class Instruction : public User {
 public:
     ~Instruction() override = default;
 
     Instruction(ValueType valueType, TypePtr type) : User(valueType, type) {}
-
-    const std::vector<ValuePtr> &getOperands() const { return operands_; }
-
-protected:
-    void addOperand(const ValuePtr &operand) { operands_.push_back(operand); }
-
-private:
-    std::vector<ValuePtr> operands_;
 };
 
 // an instruction to allocate memory on the stack
@@ -43,7 +34,10 @@ public:
     }
 
     StoreInst(ValuePtr value, ValuePtr address)
-        : Instruction(ValueType::StoreInstTy, nullptr), value_(std::move(value)), address_(std::move(address)) {}
+        : Instruction(ValueType::StoreInstTy, nullptr), value_(std::move(value)), address_(std::move(address)) {
+        addOperand(value_);
+        addOperand(address_);
+    }
 
     ValuePtr getValueOperand() const { return value_; }
     ValuePtr getAddressOperand() const { return address_; }
@@ -137,7 +131,11 @@ public:
         return std::make_shared<ReturnInst>(value);
     }
 
-    ReturnInst(ValuePtr value) : Instruction(ValueType::ReturnInstTy, nullptr), value_(std::move(value)) {}
+    ReturnInst(ValuePtr value) : Instruction(ValueType::ReturnInstTy, nullptr), value_(std::move(value)) {
+        if (value_) {
+            addOperand(value_);
+        }
+    }
 
     ValuePtr getReturnValue() const { return value_; }
 

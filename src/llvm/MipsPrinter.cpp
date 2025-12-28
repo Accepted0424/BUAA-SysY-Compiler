@@ -175,84 +175,22 @@ private:
 
     RegisterPlan planRegisters(const FunctionPtr &func) {
         std::unordered_map<const Value*, int> useCount;
-        auto bump = [&](const ValuePtr &v) {
-            if (!v || v->getValueType() == ValueType::ConstantIntTy) return;
+        auto consider = [&](const ValuePtr &v) {
+            if (!v) return;
             if (!allocatableValue(v)) return;
-            useCount[v.get()]++;
+            const int count = v->getUseCount();
+            if (count > 0) {
+                useCount[v.get()] = count;
+            }
         };
 
+        for (const auto &arg : func->getArgs()) {
+            consider(arg);
+        }
         for (auto bbIt = func->basicBlockBegin(); bbIt != func->basicBlockEnd(); ++bbIt) {
             auto bb = *bbIt;
             for (auto instIt = bb->instructionBegin(); instIt != bb->instructionEnd(); ++instIt) {
-                auto inst = *instIt;
-                switch (inst->getValueType()) {
-                    case ValueType::StoreInstTy: {
-                        auto st = std::static_pointer_cast<StoreInst>(inst);
-                        bump(st->getValueOperand());
-                        bump(st->getAddressOperand());
-                        break;
-                    }
-                    case ValueType::LoadInstTy: {
-                        auto ld = std::static_pointer_cast<LoadInst>(inst);
-                        bump(ld->getAddressOperand());
-                        break;
-                    }
-                    case ValueType::BinaryOperatorTy: {
-                        auto bi = std::static_pointer_cast<BinaryOperator>(inst);
-                        bump(bi->lhs_);
-                        bump(bi->rhs_);
-                        break;
-                    }
-                    case ValueType::CompareInstTy: {
-                        auto cmp = std::static_pointer_cast<CompareOperator>(inst);
-                        bump(cmp->getLhs());
-                        bump(cmp->getRhs());
-                        break;
-                    }
-                    case ValueType::LogicalInstTy: {
-                        auto logi = std::static_pointer_cast<LogicalOperator>(inst);
-                        bump(logi->getLhs());
-                        bump(logi->getRhs());
-                        break;
-                    }
-                    case ValueType::ZExtInstTy: {
-                        auto zext = std::static_pointer_cast<ZExtInst>(inst);
-                        bump(zext->getOperand());
-                        break;
-                    }
-                    case ValueType::UnaryOperatorTy: {
-                        auto un = std::static_pointer_cast<UnaryOperator>(inst);
-                        bump(un->getOperand());
-                        break;
-                    }
-                    case ValueType::CallInstTy: {
-                        auto call = std::static_pointer_cast<CallInst>(inst);
-                        for (const auto &arg : call->getArgs()) {
-                            bump(arg);
-                        }
-                        break;
-                    }
-                    case ValueType::GetElementPtrInstTy: {
-                        auto gep = std::static_pointer_cast<GetElementPtrInst>(inst);
-                        bump(gep->getAddressOperand());
-                        for (const auto &idx : gep->getIndices()) {
-                            bump(idx);
-                        }
-                        break;
-                    }
-                    case ValueType::ReturnInstTy: {
-                        auto ret = std::static_pointer_cast<ReturnInst>(inst);
-                        bump(ret->getReturnValue());
-                        break;
-                    }
-                    case ValueType::BranchInstTy: {
-                        auto br = std::static_pointer_cast<BranchInst>(inst);
-                        bump(br->getCondition());
-                        break;
-                    }
-                    default:
-                        break;
-                }
+                consider(*instIt);
             }
         }
 
@@ -404,7 +342,7 @@ private:
                     continue;
                 }
                 const bool pinned = plan.valueRegs.count(inst.get()) > 0;
-                if (needsValueSlot(inst->getValueType()) && !pinned) {
+                if (needsValueSlot(inst->getValueType()) && !pinned && inst->getUseCount() > 0) {
                     nextOffset += 4;
                     info.valueOffsets[inst.get()] = -nextOffset;
                 }
@@ -680,6 +618,9 @@ private:
     }
 
     void storeValue(const ValuePtr &value, const FrameInfo &frame, const std::string &reg) {
+        if (!value || value->getUseCount() == 0) {
+            return;
+        }
         auto it = frame.valueOffsets.find(value.get());
         if (it != frame.valueOffsets.end()) {
             out_ << "  sw " << reg << ", " << it->second << "($fp)\n";
@@ -707,11 +648,55 @@ private:
     }
 
     void emitBinary(const std::shared_ptr<BinaryOperator> &inst, const FrameInfo &frame) {
+        auto isConstInt = [](const ValuePtr &value, int &out) -> bool {
+            if (value && value->getValueType() == ValueType::ConstantIntTy) {
+                out = std::static_pointer_cast<ConstantInt>(value)->getValue();
+                return true;
+            }
+            return false;
+        };
+        auto fitsImm16 = [](int imm) -> bool {
+            return imm >= -32768 && imm <= 32767;
+        };
+
+        int lhsImm = 0;
+        int rhsImm = 0;
+        const bool lhsIsImm = isConstInt(inst->lhs_, lhsImm);
+        const bool rhsIsImm = isConstInt(inst->rhs_, rhsImm);
+        auto dst = acquireTargetReg(inst, frame);
+
+        if (inst->OpType() == BinaryOpType::ADD && rhsIsImm && fitsImm16(rhsImm)) {
+            auto lhsReg = temps_.acquire();
+            loadValue(inst->lhs_, frame, lhsReg);
+            out_ << "  addiu " << dst.name << ", " << lhsReg << ", " << rhsImm << "\n";
+            temps_.release(lhsReg);
+            storeValue(inst, frame, dst.name);
+            releaseTarget(dst);
+            return;
+        }
+        if (inst->OpType() == BinaryOpType::ADD && lhsIsImm && fitsImm16(lhsImm)) {
+            auto rhsReg = temps_.acquire();
+            loadValue(inst->rhs_, frame, rhsReg);
+            out_ << "  addiu " << dst.name << ", " << rhsReg << ", " << lhsImm << "\n";
+            temps_.release(rhsReg);
+            storeValue(inst, frame, dst.name);
+            releaseTarget(dst);
+            return;
+        }
+        if (inst->OpType() == BinaryOpType::SUB && rhsIsImm && fitsImm16(-rhsImm)) {
+            auto lhsReg = temps_.acquire();
+            loadValue(inst->lhs_, frame, lhsReg);
+            out_ << "  addiu " << dst.name << ", " << lhsReg << ", " << -rhsImm << "\n";
+            temps_.release(lhsReg);
+            storeValue(inst, frame, dst.name);
+            releaseTarget(dst);
+            return;
+        }
+
         auto lhsReg = temps_.acquire();
         auto rhsReg = temps_.acquire();
         loadValue(inst->lhs_, frame, lhsReg);
         loadValue(inst->rhs_, frame, rhsReg);
-        auto dst = acquireTargetReg(inst, frame);
         switch (inst->OpType()) {
             case BinaryOpType::ADD:
                 out_ << "  addu " << dst.name << ", " << lhsReg << ", " << rhsReg << "\n";
@@ -738,38 +723,54 @@ private:
     }
 
     void emitCompare(const std::shared_ptr<CompareOperator> &inst, const FrameInfo &frame) {
+        auto isConstInt = [](const ValuePtr &value, int &out) -> bool {
+            if (value && value->getValueType() == ValueType::ConstantIntTy) {
+                out = std::static_pointer_cast<ConstantInt>(value)->getValue();
+                return true;
+            }
+            return false;
+        };
+        int rhsImm = 0;
+        const bool rhsIsZero = isConstInt(inst->getRhs(), rhsImm) && rhsImm == 0;
+
         auto lhsReg = temps_.acquire();
-        auto rhsReg = temps_.acquire();
         loadValue(inst->getLhs(), frame, lhsReg);
-        loadValue(inst->getRhs(), frame, rhsReg);
         auto dst = acquireTargetReg(inst, frame);
-        switch (inst->OpType()) {
-            case CompareOpType::EQL:
-                out_ << "  xor " << dst.name << ", " << lhsReg << ", " << rhsReg << "\n";
-                out_ << "  sltiu " << dst.name << ", " << dst.name << ", 1\n";
-                break;
-            case CompareOpType::NEQ:
-                out_ << "  xor " << dst.name << ", " << lhsReg << ", " << rhsReg << "\n";
-                out_ << "  sltu " << dst.name << ", $zero, " << dst.name << "\n";
-                break;
-            case CompareOpType::LSS:
-                out_ << "  slt " << dst.name << ", " << lhsReg << ", " << rhsReg << "\n";
-                break;
-            case CompareOpType::GRE:
-                out_ << "  slt " << dst.name << ", " << rhsReg << ", " << lhsReg << "\n";
-                break;
-            case CompareOpType::LEQ:
-                out_ << "  slt " << dst.name << ", " << rhsReg << ", " << lhsReg << "\n";
-                out_ << "  xori " << dst.name << ", " << dst.name << ", 1\n";
-                break;
-            case CompareOpType::GEQ:
-                out_ << "  slt " << dst.name << ", " << lhsReg << ", " << rhsReg << "\n";
-                out_ << "  xori " << dst.name << ", " << dst.name << ", 1\n";
-                break;
+        if (rhsIsZero && inst->OpType() == CompareOpType::EQL) {
+            out_ << "  sltiu " << dst.name << ", " << lhsReg << ", 1\n";
+        } else if (rhsIsZero && inst->OpType() == CompareOpType::NEQ) {
+            out_ << "  sltu " << dst.name << ", $zero, " << lhsReg << "\n";
+        } else {
+            auto rhsReg = temps_.acquire();
+            loadValue(inst->getRhs(), frame, rhsReg);
+            switch (inst->OpType()) {
+                case CompareOpType::EQL:
+                    out_ << "  xor " << dst.name << ", " << lhsReg << ", " << rhsReg << "\n";
+                    out_ << "  sltiu " << dst.name << ", " << dst.name << ", 1\n";
+                    break;
+                case CompareOpType::NEQ:
+                    out_ << "  xor " << dst.name << ", " << lhsReg << ", " << rhsReg << "\n";
+                    out_ << "  sltu " << dst.name << ", $zero, " << dst.name << "\n";
+                    break;
+                case CompareOpType::LSS:
+                    out_ << "  slt " << dst.name << ", " << lhsReg << ", " << rhsReg << "\n";
+                    break;
+                case CompareOpType::GRE:
+                    out_ << "  slt " << dst.name << ", " << rhsReg << ", " << lhsReg << "\n";
+                    break;
+                case CompareOpType::LEQ:
+                    out_ << "  slt " << dst.name << ", " << rhsReg << ", " << lhsReg << "\n";
+                    out_ << "  xori " << dst.name << ", " << dst.name << ", 1\n";
+                    break;
+                case CompareOpType::GEQ:
+                    out_ << "  slt " << dst.name << ", " << lhsReg << ", " << rhsReg << "\n";
+                    out_ << "  xori " << dst.name << ", " << dst.name << ", 1\n";
+                    break;
+            }
+            temps_.release(rhsReg);
         }
         storeValue(inst, frame, dst.name);
         temps_.release(lhsReg);
-        temps_.release(rhsReg);
         releaseTarget(dst);
     }
 

@@ -8,16 +8,15 @@ public:
     Use &operator=(const Use &) = delete;
 
     // static factory method
-    static UsePtr New(UserPtr user, ValuePtr value);
+    static UsePtr New(User *user, Value *value);
 
-    ValuePtr getValue() const { return value_; }
+    Value *getValue() const { return value_; }
 
-    UserPtr getUser() const { return user_; }
+    User *getUser() const { return user_; }
 
-private:
-    UserPtr user_;
+    User *user_;
 
-    ValuePtr value_;
+    Value *value_;
 
-    Use(UserPtr user, ValuePtr value) : user_(user), value_(value) {}
+    Use(User *user, Value *value) : user_(user), value_(value) {}
 };

@@ -58,6 +58,18 @@ public:
         name_ = name;
     }
 
+    void addUse(User *user);
+
+    void removeUse(User *user);
+
+    const UseList &getUses() const {
+        return uses_;
+    }
+
+    int getUseCount() const {
+        return static_cast<int>(uses_.size());
+    }
+
 protected:
     TypePtr type_;
 
@@ -71,4 +83,5 @@ protected:
 
 private:
     ValueType value_type_;
+    UseList uses_;
 };
