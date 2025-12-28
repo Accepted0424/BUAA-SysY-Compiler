@@ -23,6 +23,15 @@ ConstantIntPtr makeConst(LlvmContext* ctx, int value) {
     return ConstantInt::create(ctx->getIntegerTy(), value);
 }
 
+ConstantIntPtr asConstInt(const ValuePtr &value) {
+    return std::dynamic_pointer_cast<ConstantInt>(value);
+}
+
+bool isConstValue(const ValuePtr &value, int expected) {
+    auto ci = asConstInt(value);
+    return ci && ci->getValue() == expected;
+}
+
 std::string ptrKey(const ValuePtr &value) {
     return std::to_string(reinterpret_cast<uintptr_t>(value.get()));
 }
@@ -376,6 +385,9 @@ ValuePtr Visitor::toBool(const ValuePtr &value) {
                   value->getValueType() == ValueType::LogicalInstTy)) {
         return value;
     }
+    if (auto ci = asConstInt(value)) {
+        return ConstantInt::create(ir_module_.getContext()->getBoolTy(), ci->getValue() != 0);
+    }
     auto ctx = ir_module_.getContext();
     auto rhs = makeConst(ctx, 0);
     return createCmp(CompareOpType::NEQ, value, rhs);
@@ -393,6 +405,9 @@ ValuePtr Visitor::zextToInt32(const ValuePtr &value) {
         if (!forceZext && intType->getBitWidth() == 32) {
             return value;
         }
+        if (auto ci = asConstInt(value)) {
+            return ConstantInt::create(ctxInt32, ci->getValue());
+        }
         auto res = reuseZExt(ctxInt32, value);
         if (res.created) {
             insertInst(std::dynamic_pointer_cast<Instruction>(res.value));
@@ -407,6 +422,22 @@ ValuePtr Visitor::createCmp(CompareOpType op, ValuePtr lhs, ValuePtr rhs) {
     rhs = loadIfPointer(rhs);
     lhs = zextToInt32(lhs);
     rhs = zextToInt32(rhs);
+    if (auto lhsConst = asConstInt(lhs)) {
+        if (auto rhsConst = asConstInt(rhs)) {
+            const int l = lhsConst->getValue();
+            const int r = rhsConst->getValue();
+            bool res = false;
+            switch (op) {
+                case CompareOpType::EQL: res = (l == r); break;
+                case CompareOpType::NEQ: res = (l != r); break;
+                case CompareOpType::LSS: res = (l < r); break;
+                case CompareOpType::GRE: res = (l > r); break;
+                case CompareOpType::LEQ: res = (l <= r); break;
+                case CompareOpType::GEQ: res = (l >= r); break;
+            }
+            return ConstantInt::create(ir_module_.getContext()->getBoolTy(), res ? 1 : 0);
+        }
+    }
     auto res = reuseCompare(op, lhs, rhs);
     if (res.created) {
         insertInst(std::dynamic_pointer_cast<Instruction>(res.value));
@@ -650,25 +681,27 @@ ValuePtr Visitor::visitUnaryExp(const UnaryExp &unaryExp) {
             ValuePtr res = nullptr;
             switch (unaryExp.unary->op->kind) {
                 case UnaryOp::PLUS:
-                    {
-                        auto uni = reuseUnary(UnaryOpType::POS, rhs);
-                        if (uni.created) {
-                            insertInst(std::dynamic_pointer_cast<Instruction>(uni.value));
-                        }
-                        res = uni.value;
-                    }
+                    res = rhs;
                     break;
                 case UnaryOp::MINU:
                     {
-                        auto uni = reuseUnary(UnaryOpType::NEG, rhs);
-                        if (uni.created) {
-                            insertInst(std::dynamic_pointer_cast<Instruction>(uni.value));
+                        if (auto ci = asConstInt(rhs)) {
+                            res = ConstantInt::create(ir_module_.getContext()->getIntegerTy(), -ci->getValue());
+                        } else {
+                            auto uni = reuseUnary(UnaryOpType::NEG, rhs);
+                            if (uni.created) {
+                                insertInst(std::dynamic_pointer_cast<Instruction>(uni.value));
+                            }
+                            res = uni.value;
                         }
-                        res = uni.value;
                     }
                     break;
                 case UnaryOp::NOT:
-                    res = createCmp(CompareOpType::EQL, rhs, makeConst(ir_module_.getContext(), 0));
+                    if (auto ci = asConstInt(rhs)) {
+                        res = ConstantInt::create(ir_module_.getContext()->getBoolTy(), ci->getValue() == 0);
+                    } else {
+                        res = createCmp(CompareOpType::EQL, rhs, makeConst(ir_module_.getContext(), 0));
+                    }
                     break;
                 default:
                     LOG_ERROR("Unreachable in Visitor::visitUnaryExp");
@@ -684,9 +717,43 @@ ValuePtr Visitor::visitMulExp(const MulExp &mulExp) {
     auto lhs = loadIfPointer(visitUnaryExp(*mulExp.first));
     for (const auto &[op, rhs] : mulExp.rest) {
         auto rhsVal = loadIfPointer(visitUnaryExp(*rhs));
+        if (auto lhsConst = asConstInt(lhs)) {
+            if (auto rhsConst = asConstInt(rhsVal)) {
+                const int l = lhsConst->getValue();
+                const int r = rhsConst->getValue();
+                bool folded = true;
+                int resVal = 0;
+                switch (op) {
+                    case MulExp::MULT: resVal = l * r; break;
+                    case MulExp::DIV:
+                        if (r == 0) folded = false;
+                        else resVal = l / r;
+                        break;
+                    case MulExp::MOD:
+                        if (r == 0) folded = false;
+                        else resVal = l % r;
+                        break;
+                }
+                if (folded) {
+                    lhs = ConstantInt::create(ir_module_.getContext()->getIntegerTy(), resVal);
+                    continue;
+                }
+            }
+        }
         switch (op) {
             case MulExp::MULT:
                 {
+                    if (isConstValue(lhs, 0) || isConstValue(rhsVal, 0)) {
+                        lhs = makeConst(ir_module_.getContext(), 0);
+                        break;
+                    }
+                    if (isConstValue(lhs, 1)) {
+                        lhs = rhsVal;
+                        break;
+                    }
+                    if (isConstValue(rhsVal, 1)) {
+                        break;
+                    }
                     auto res = reuseBinary(BinaryOpType::MUL, lhs, rhsVal);
                     if (res.created) {
                         insertInst(std::dynamic_pointer_cast<Instruction>(res.value));
@@ -696,6 +763,9 @@ ValuePtr Visitor::visitMulExp(const MulExp &mulExp) {
                 break;
             case MulExp::DIV:
                 {
+                    if (isConstValue(rhsVal, 1)) {
+                        break;
+                    }
                     auto res = reuseBinary(BinaryOpType::DIV, lhs, rhsVal);
                     if (res.created) {
                         insertInst(std::dynamic_pointer_cast<Instruction>(res.value));
@@ -705,6 +775,10 @@ ValuePtr Visitor::visitMulExp(const MulExp &mulExp) {
                 break;
             case MulExp::MOD:
                 {
+                    if (isConstValue(rhsVal, 1)) {
+                        lhs = makeConst(ir_module_.getContext(), 0);
+                        break;
+                    }
                     auto res = reuseBinary(BinaryOpType::MOD, lhs, rhsVal);
                     if (res.created) {
                         insertInst(std::dynamic_pointer_cast<Instruction>(res.value));
@@ -721,9 +795,25 @@ ValuePtr Visitor::visitAddExp(const AddExp &addExp) {
     auto lhs = loadIfPointer(visitMulExp(*addExp.first));
     for (const auto &[op, rhs] : addExp.rest) {
         auto rhsVal = loadIfPointer(visitMulExp(*rhs));
+        if (auto lhsConst = asConstInt(lhs)) {
+            if (auto rhsConst = asConstInt(rhsVal)) {
+                const int l = lhsConst->getValue();
+                const int r = rhsConst->getValue();
+                const int resVal = (op == AddExp::PLUS) ? (l + r) : (l - r);
+                lhs = ConstantInt::create(ir_module_.getContext()->getIntegerTy(), resVal);
+                continue;
+            }
+        }
         switch (op) {
             case AddExp::PLUS:
                 {
+                    if (isConstValue(rhsVal, 0)) {
+                        break;
+                    }
+                    if (isConstValue(lhs, 0)) {
+                        lhs = rhsVal;
+                        break;
+                    }
                     auto res = reuseBinary(BinaryOpType::ADD, lhs, rhsVal);
                     if (res.created) {
                         insertInst(std::dynamic_pointer_cast<Instruction>(res.value));
@@ -733,6 +823,9 @@ ValuePtr Visitor::visitAddExp(const AddExp &addExp) {
                 break;
             case AddExp::MINU:
                 {
+                    if (isConstValue(rhsVal, 0)) {
+                        break;
+                    }
                     auto res = reuseBinary(BinaryOpType::SUB, lhs, rhsVal);
                     if (res.created) {
                         insertInst(std::dynamic_pointer_cast<Instruction>(res.value));
@@ -1420,6 +1513,7 @@ FunctionPtr Visitor::visitMainFuncDef(const MainFuncDef &mainFunc) {
 
 void Visitor::visit(const CompUnit &compUnit) {
     auto context = ir_module_.getContext();
+
     auto addBuiltin = [&](const std::string &name, TypePtr ret, const std::vector<TypePtr> &params) {
         std::vector<ArgumentPtr> args;
         for (size_t i = 0; i < params.size(); ++i) {
