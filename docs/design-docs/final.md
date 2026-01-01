@@ -312,6 +312,10 @@ IR 实现位于 `src/llvm/include/ir/`，核心对象为 `Module/Function/BasicB
 * 对 basic block 内的 Unary POS 拷贝链进行 coalescing
 * 活跃区间不冲突时合并 SSA 值到同一物理寄存器，减少 `move`
 
+### 9.6 算术强度削弱（2 的幂）
+
+* 检测 `x * 2^n` 并生成 `sll` 替代 `mul`，降低指令成本
+
 ---
 
 ## 10. 测试、验证与维护建议

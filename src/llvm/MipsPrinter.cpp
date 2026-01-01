@@ -1201,6 +1201,16 @@ private:
             }
             return false;
         };
+        auto powerOfTwoShift = [](int value, int &shift) -> bool {
+            if (value <= 0) return false;
+            if ((value & (value - 1)) != 0) return false;
+            shift = 0;
+            while (value > 1) {
+                ++shift;
+                value >>= 1;
+            }
+            return true;
+        };
         auto fitsImm16 = [](int imm) -> bool {
             return imm >= -32768 && imm <= 32767;
         };
@@ -1237,6 +1247,27 @@ private:
             storeValue(inst, frame, dst.name, cache);
             releaseTarget(dst);
             return;
+        }
+        if (inst->OpType() == BinaryOpType::MUL) {
+            int shift = 0;
+            if (rhsIsImm && powerOfTwoShift(rhsImm, shift)) {
+                auto lhsReg = temps_.acquire();
+                loadValue(inst->lhs_, frame, lhsReg, cache);
+                out_ << "  sll " << dst.name << ", " << lhsReg << ", " << shift << "\n";
+                temps_.release(lhsReg);
+                storeValue(inst, frame, dst.name, cache);
+                releaseTarget(dst);
+                return;
+            }
+            if (lhsIsImm && powerOfTwoShift(lhsImm, shift)) {
+                auto rhsReg = temps_.acquire();
+                loadValue(inst->rhs_, frame, rhsReg, cache);
+                out_ << "  sll " << dst.name << ", " << rhsReg << ", " << shift << "\n";
+                temps_.release(rhsReg);
+                storeValue(inst, frame, dst.name, cache);
+                releaseTarget(dst);
+                return;
+            }
         }
 
         auto lhsReg = temps_.acquire();

@@ -75,6 +75,9 @@
 - 当参数只读、无 address-taken 局部变量、无变长栈对象时省略 `$fp`。
 - 仅在存在 call 时保存 `$ra`。
 
+### 10) 算术强度削弱（2 的幂）
+- `x * 2^n` 直接生成 `sll`，避免 `mul`。
+
 ## IR PassManager 优化
 位置：`src/llvm/PassManager.cpp`, `src/llvm/include/ir/pass/PassManager.h`
 
