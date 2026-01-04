@@ -80,7 +80,7 @@ int main(int argc, char *argv[]) {
 
     Logger::instance().setLevel(LogLevel::RELEASE);
 
-    bool enableOpt = false;
+    bool enableOpt = true;
 
     // lex(infile, outfile);
     // parse(infile, outfile);

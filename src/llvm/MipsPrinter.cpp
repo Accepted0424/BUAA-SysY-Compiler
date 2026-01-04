@@ -702,7 +702,8 @@ private:
         const RegisterPlan &plan, bool hasCall, bool enableOpt) {
         FrameInfo info;
         info.hasCall = hasCall;
-        int nextOffset = 8;  // keep space for $ra and $fp near the top of the frame
+        // Reserve space for $ra/$fp and any callee-saved regs at the top of the frame.
+        int nextOffset = 8 + static_cast<int>(plan.calleeSaved.size()) * 4;
 
         std::vector<InstructionPtr> instList;
         for (auto bbIt = func->basicBlockBegin(); bbIt != func->basicBlockEnd(); ++bbIt) {
@@ -781,7 +782,6 @@ private:
             }
         }
 
-        nextOffset += static_cast<int>(plan.calleeSaved.size()) * 4;
         info.frameSize = alignTo4(nextOffset);
         info.regs = plan;
         int saveOffset = 12;
