@@ -418,6 +418,9 @@ private:
                 addr = ld->getAddressOperand();
             }
             if (!addr) continue;
+            if (addr->getValueType() != ValueType::AllocaInstTy) {
+                continue;
+            }
 
             auto info = std::make_unique<LoopInfo>();
             info->cond = cond;
@@ -702,8 +705,13 @@ private:
         const RegisterPlan &plan, bool hasCall, bool enableOpt) {
         FrameInfo info;
         info.hasCall = hasCall;
-        // Reserve space for $ra/$fp and any callee-saved regs at the top of the frame.
-        int nextOffset = 8 + static_cast<int>(plan.calleeSaved.size()) * 4;
+        const int fixedSize = 8 + static_cast<int>(plan.calleeSaved.size()) * 4;
+        int localSize = 0;
+        auto allocLocal = [&](int size) {
+            localSize = alignTo4(localSize);
+            localSize += alignTo4(size);
+            return -(fixedSize + localSize);
+        };
 
         std::vector<InstructionPtr> instList;
         for (auto bbIt = func->basicBlockBegin(); bbIt != func->basicBlockEnd(); ++bbIt) {
@@ -728,8 +736,7 @@ private:
         for (const auto &inst : instList) {
             if (inst->getValueType() == ValueType::AllocaInstTy) {
                 const int sz = typeSize(inst->getType());
-                nextOffset += sz;
-                info.allocaOffsets[inst.get()] = -nextOffset;
+                info.allocaOffsets[inst.get()] = allocLocal(sz);
             }
         }
 
@@ -742,8 +749,7 @@ private:
                 if (!hasCall) {
                     info.argRegs[arg.get()] = "$a" + std::to_string(argIdx);
                 } else {
-                    nextOffset += 4;
-                    info.argOffsets[arg.get()] = -nextOffset;
+                    info.argOffsets[arg.get()] = allocLocal(4);
                 }
             }
             ++argIdx;
@@ -769,8 +775,7 @@ private:
                     offset = freeSlots.back();
                     freeSlots.pop_back();
                 } else {
-                    nextOffset += 4;
-                    offset = -nextOffset;
+                    offset = allocLocal(4);
                 }
                 info.valueOffsets[inst.get()] = offset;
             }
@@ -782,7 +787,7 @@ private:
             }
         }
 
-        info.frameSize = alignTo4(nextOffset);
+        info.frameSize = alignTo4(fixedSize + localSize);
         info.regs = plan;
         int saveOffset = 12;
         for (const auto &reg : plan.calleeSaved) {
@@ -888,6 +893,14 @@ private:
                 arrayLoops = buildArrayLoops(bb);
             }
             out_ << frame.blockLabels[bb.get()] << ":\n";
+            if (curInductionAddr_) {
+                auto offIt = frame.allocaOffsets.find(curInductionAddr_);
+                if (offIt != frame.allocaOffsets.end()) {
+                    out_ << "  lw $t7, " << offIt->second << "($fp)\n";
+                } else {
+                    curInductionAddr_ = nullptr;
+                }
+            }
             for (auto instIt = bb->instructionBegin(); instIt != bb->instructionEnd(); ++instIt) {
                 emitInstruction(*instIt, frame, retLabel, cache, skipInsts, arrayLoops);
             }
