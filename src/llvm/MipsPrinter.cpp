@@ -1636,12 +1636,22 @@ private:
 
     void emitJump(const std::shared_ptr<JumpInst> &inst, const FrameInfo &frame) {
         auto target = inst->getTarget();
-        auto loopIt = loopByCond_.find(target.get());
-        if (loopIt != loopByCond_.end() && loopForBlock_.count(curBlock_) == 0) {
-            auto addr = loopIt->second->addr;
-            auto offIt = frame.allocaOffsets.find(addr.get());
-            if (offIt != frame.allocaOffsets.end()) {
-                out_ << "  lw $t7, " << offIt->second << "($fp)\n";
+        auto targetIt = loopForBlock_.find(target.get());
+        if (targetIt != loopForBlock_.end()) {
+            const auto *targetLoop = targetIt->second;
+            const LoopInfo *curLoop = nullptr;
+            if (curBlock_) {
+                auto curIt = loopForBlock_.find(curBlock_);
+                if (curIt != loopForBlock_.end()) {
+                    curLoop = curIt->second;
+                }
+            }
+            if (curLoop != targetLoop) {
+                auto addr = targetLoop->addr;
+                auto offIt = frame.allocaOffsets.find(addr.get());
+                if (offIt != frame.allocaOffsets.end()) {
+                    out_ << "  lw $t7, " << offIt->second << "($fp)\n";
+                }
             }
         }
         out_ << "  j " << frame.blockLabels.at(target.get()) << "\n";

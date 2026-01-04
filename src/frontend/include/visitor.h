@@ -37,8 +37,6 @@ private:
 
     BasicBlockPtr cur_block_ = nullptr;
 
-    bool inForLoop_ = false;
-
     std::vector<BasicBlockPtr> breakTargets_;
     std::vector<BasicBlockPtr> continueTargets_;
 

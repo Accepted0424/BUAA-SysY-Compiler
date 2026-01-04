@@ -1318,7 +1318,6 @@ bool Visitor::visitStmt(const Stmt &stmt) {
             }
             break;
         case Stmt::FOR:
-            inForLoop_ = true;
             if (stmt.forStmt.forStmtFirst != nullptr) {
                 visitForStmt(*stmt.forStmt.forStmtFirst);
             }
@@ -1357,10 +1356,9 @@ bool Visitor::visitStmt(const Stmt &stmt) {
 
                 cur_block_ = endBB;
             }
-            inForLoop_ = false;
             break;
         case Stmt::BREAK:
-            if (!inForLoop_) {
+            if (breakTargets_.empty()) {
                 ErrorReporter::error(stmt.lineno, ERR_BREAK_CONTINUE_OUTSIDE_LOOP);
             } else {
                 insertInst(JumpInst::create(breakTargets_.back()));
@@ -1368,7 +1366,7 @@ bool Visitor::visitStmt(const Stmt &stmt) {
             }
             break;
         case Stmt::CONTINUE:
-            if (!inForLoop_) {
+            if (continueTargets_.empty()) {
                 ErrorReporter::error(stmt.lineno, ERR_BREAK_CONTINUE_OUTSIDE_LOOP);
             } else {
                 insertInst(JumpInst::create(continueTargets_.back()));
