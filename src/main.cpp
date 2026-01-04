@@ -1,5 +1,6 @@
 #include <fstream>
 #include <iostream>
+#include <string>
 
 #include "error.h"
 #include "lexer.h"
@@ -49,7 +50,7 @@ void semanticAnalyse(std::ifstream& file, std::ofstream& out) {
 }
 
 // homework 5
-void generateCode(std::ifstream& file, std::ofstream& irOut, std::ofstream& mipsOut) {
+void generateCode(std::ifstream& file, std::ofstream& irOut, std::ofstream& mipsOut, bool enableOpt) {
     Lexer lexer(file);
     Parser parser(lexer);
     auto root = parser.parse();
@@ -67,7 +68,7 @@ void generateCode(std::ifstream& file, std::ofstream& irOut, std::ofstream& mips
     const AsmPrinter irPrinter(module, irOut);
     irPrinter.print();
 
-    const MipsPrinter mipsPrinter(module, mipsOut);
+    const MipsPrinter mipsPrinter(module, mipsOut, enableOpt);
     mipsPrinter.print();
 }
 
@@ -79,10 +80,12 @@ int main(int argc, char *argv[]) {
 
     Logger::instance().setLevel(LogLevel::RELEASE);
 
+    bool enableOpt = false;
+
     // lex(infile, outfile);
     // parse(infile, outfile);
     // semanticAnalyse(infile, outfile);
-    generateCode(infile, outfile, mipsfile);
+    generateCode(infile, outfile, mipsfile, enableOpt);
 
     ErrorReporter::get().dump(errorfile);
 

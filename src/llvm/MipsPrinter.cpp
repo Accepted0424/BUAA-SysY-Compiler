@@ -253,8 +253,8 @@ struct BlockRegCache {
 
 class MipsPrinterImpl {
 public:
-    MipsPrinterImpl(Module &module, std::ostream &out)
-        : module_(module), out_(out) {}
+    MipsPrinterImpl(Module &module, std::ostream &out, bool enableOpt)
+        : module_(module), out_(out), enableOpt_(enableOpt) {}
 
     void print() {
         emitData();
@@ -279,6 +279,7 @@ public:
 private:
     Module &module_;
     std::ostream &out_;
+    bool enableOpt_ = true;
     TempRegPool temps_;
     const BasicBlock *curBlock_ = nullptr;
     const Value *curInductionAddr_ = nullptr;
@@ -698,7 +699,7 @@ private:
     }
 
     FrameInfo buildFrameInfo(const FunctionPtr &func, const std::string &funcLabelPrefix,
-        const RegisterPlan &plan, bool hasCall) {
+        const RegisterPlan &plan, bool hasCall, bool enableOpt) {
         FrameInfo info;
         info.hasCall = hasCall;
         int nextOffset = 8;  // keep space for $ra and $fp near the top of the frame
@@ -789,12 +790,14 @@ private:
             saveOffset += 4;
         }
 
-        const bool noStackSlots = info.allocaOffsets.empty() && info.valueOffsets.empty() &&
-            info.argOffsets.empty() && plan.calleeSaved.empty();
-        const bool noCallerArgs = info.callerArgOffsets.empty();
-        if (!hasCall && noStackSlots && noCallerArgs) {
-            info.frameSize = 0;
-            info.omitPrologue = true;
+        if (enableOpt) {
+            const bool noStackSlots = info.allocaOffsets.empty() && info.valueOffsets.empty() &&
+                info.argOffsets.empty() && plan.calleeSaved.empty();
+            const bool noCallerArgs = info.callerArgOffsets.empty();
+            if (!hasCall && noStackSlots && noCallerArgs) {
+                info.frameSize = 0;
+                info.omitPrologue = true;
+            }
         }
 
         int bbId = 0;
@@ -821,11 +824,23 @@ private:
 
     void emitFunction(const FunctionPtr &func) {
         const auto funcName = sanitizeName(func->getName());
-        auto regPlan = planRegisters(func);
+        RegisterPlan regPlan;
+        if (enableOpt_) {
+            regPlan = planRegisters(func);
+        }
         const bool hasCall = functionHasCall(func);
-        FrameInfo frame = buildFrameInfo(func, funcName, regPlan, hasCall);
-        detectLoopInductions(func);
-        auto skipInsts = computeSkipInsts(func);
+        FrameInfo frame = buildFrameInfo(func, funcName, regPlan, hasCall, enableOpt_);
+        if (enableOpt_) {
+            detectLoopInductions(func);
+        } else {
+            loopInfos_.clear();
+            loopForBlock_.clear();
+            loopByCond_.clear();
+        }
+        std::unordered_set<const Instruction*> skipInsts;
+        if (enableOpt_) {
+            skipInsts = computeSkipInsts(func);
+        }
         const std::string retLabel = funcName + "_ret";
 
         out_ << "\n" << funcName << ":\n";
@@ -868,7 +883,10 @@ private:
             curInductionAddr_ = (loopIt != loopForBlock_.end()) ? loopIt->second->addr.get() : nullptr;
             BlockRegCache cache;
             cache.reset();
-            auto arrayLoops = buildArrayLoops(bb);
+            ArrayLoopPlan arrayLoops;
+            if (enableOpt_) {
+                arrayLoops = buildArrayLoops(bb);
+            }
             out_ << frame.blockLabels[bb.get()] << ":\n";
             for (auto instIt = bb->instructionBegin(); instIt != bb->instructionEnd(); ++instIt) {
                 emitInstruction(*instIt, frame, retLabel, cache, skipInsts, arrayLoops);
@@ -995,12 +1013,14 @@ private:
             return;
         }
 
-        const auto cached = cache.get(value.get());
-        if (!cached.empty()) {
-            if (cached != reg) {
-                out_ << "  move " << reg << ", " << cached << "\n";
+        if (enableOpt_) {
+            const auto cached = cache.get(value.get());
+            if (!cached.empty()) {
+                if (cached != reg) {
+                    out_ << "  move " << reg << ", " << cached << "\n";
+                }
+                return;
             }
-            return;
         }
 
         bool loaded = false;
@@ -1067,12 +1087,14 @@ private:
             }
         }
 
-        if (value->getValueType() != ValueType::ConstantIntTy &&
-            regForValue(value, frame).empty() &&
-            value->getUseCount() > 1) {
-            auto cacheReg = cache.bind(value.get());
-            if (!cacheReg.empty() && cacheReg != reg) {
-                out_ << "  move " << cacheReg << ", " << reg << "\n";
+        if (enableOpt_) {
+            if (value->getValueType() != ValueType::ConstantIntTy &&
+                regForValue(value, frame).empty() &&
+                value->getUseCount() > 1) {
+                auto cacheReg = cache.bind(value.get());
+                if (!cacheReg.empty() && cacheReg != reg) {
+                    out_ << "  move " << cacheReg << ", " << reg << "\n";
+                }
             }
         }
     }
@@ -1153,10 +1175,12 @@ private:
         if (it != frame.valueOffsets.end()) {
             out_ << "  sw " << reg << ", " << it->second << "($fp)\n";
         }
-        if (regForValue(value, frame).empty()) {
-            auto cacheReg = cache.bind(value.get());
-            if (!cacheReg.empty() && cacheReg != reg) {
-                out_ << "  move " << cacheReg << ", " << reg << "\n";
+        if (enableOpt_) {
+            if (regForValue(value, frame).empty()) {
+                auto cacheReg = cache.bind(value.get());
+                if (!cacheReg.empty() && cacheReg != reg) {
+                    out_ << "  move " << cacheReg << ", " << reg << "\n";
+                }
             }
         }
     }
@@ -1684,6 +1708,6 @@ private:
 };
 
 void MipsPrinter::print() const {
-    MipsPrinterImpl impl(module_, out_);
+    MipsPrinterImpl impl(module_, out_, enableOpt_);
     impl.print();
 }
