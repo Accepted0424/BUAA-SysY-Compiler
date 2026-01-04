@@ -1049,6 +1049,14 @@ void Visitor::visitVarDecl(const VarDecl &varDecl) {
                         }
                         insertInst(StoreInst::create(val, gep.value));
                     }
+                    while (idx < arraySize) {
+                        auto idxConst = makeConst(context, idx++);
+                        auto gep = reuseGEP(context->getIntegerTy(), alloca, {makeConst(context, 0), idxConst});
+                        if (gep.created) {
+                            insertInst(std::dynamic_pointer_cast<Instruction>(gep.value));
+                        }
+                        insertInst(StoreInst::create(makeConst(context, 0), gep.value));
+                    }
                 }
             } else {
                 auto alloca = AllocaInst::create(context->getIntegerTy(), name);
