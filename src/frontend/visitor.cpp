@@ -1247,7 +1247,11 @@ void Visitor::emitLAndBranch(const LAndExp &lAndExp, const BasicBlockPtr &trueBB
 }
 
 void Visitor::emitEqBranch(const EqExp &eqExp, const BasicBlockPtr &trueBB, const BasicBlockPtr &falseBB) {
-    auto condVal = visitEqExp(eqExp);
+    auto rawVal = visitEqExp(eqExp);
+    if (!rawVal) {
+        return;
+    }
+    auto condVal = toBool(rawVal);
     if (auto ci = asConstInt(condVal)) {
         insertInst(JumpInst::create(ci->getValue() != 0 ? trueBB : falseBB));
         return;
