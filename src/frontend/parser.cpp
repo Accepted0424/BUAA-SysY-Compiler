@@ -443,7 +443,8 @@ std::unique_ptr<UnaryExp> Parser::parseUnaryExp() {
 
         match(Token::LPARENT);
 
-        if (!is(Token::RPARENT)) {
+        if (!is(Token::RPARENT) && (is(Token::IDENFR) || is(Token::LPARENT) || is(Token::INTCON) ||
+            is(Token::PLUS) || is(Token::MINU) || is(Token::NOT))) {
             call.params = parseFuncRParams();
         }
 
