@@ -715,11 +715,38 @@ private:
 
         std::vector<InstructionPtr> instList;
         std::vector<const BasicBlock*> instBlocks;
+        std::vector<BasicBlockPtr> blockList;
+        std::unordered_map<const BasicBlock*, size_t> blockIndex;
         for (auto bbIt = func->basicBlockBegin(); bbIt != func->basicBlockEnd(); ++bbIt) {
             auto bb = *bbIt;
+            blockIndex[bb.get()] = blockList.size();
+            blockList.push_back(bb);
             for (auto instIt = bb->instructionBegin(); instIt != bb->instructionEnd(); ++instIt) {
                 instList.push_back(*instIt);
                 instBlocks.push_back(bb.get());
+            }
+        }
+        bool hasBackEdge = false;
+        for (size_t i = 0; i < blockList.size(); ++i) {
+            auto term = getTerminator(blockList[i]);
+            if (!term) continue;
+            if (term->getValueType() == ValueType::JumpInstTy) {
+                auto j = std::static_pointer_cast<JumpInst>(term);
+                auto target = j->getTarget();
+                if (target && blockIndex.count(target.get()) &&
+                    blockIndex[target.get()] <= i) {
+                    hasBackEdge = true;
+                    break;
+                }
+            } else if (term->getValueType() == ValueType::BranchInstTy) {
+                auto br = std::static_pointer_cast<BranchInst>(term);
+                auto t = br->getTrueBlock();
+                auto f = br->getFalseBlock();
+                if ((t && blockIndex.count(t.get()) && blockIndex[t.get()] <= i) ||
+                    (f && blockIndex.count(f.get()) && blockIndex[f.get()] <= i)) {
+                    hasBackEdge = true;
+                    break;
+                }
             }
         }
 
@@ -780,7 +807,7 @@ private:
             const bool pinned = plan.valueRegs.count(inst.get()) > 0;
             if (needsValueSlot(inst->getValueType()) && !pinned && inst->getUseCount() > 0) {
                 int offset = 0;
-                if (!freeSlots.empty()) {
+                if (!hasBackEdge && !freeSlots.empty()) {
                     offset = freeSlots.back();
                     freeSlots.pop_back();
                 } else {
