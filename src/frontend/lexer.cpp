@@ -249,13 +249,7 @@ void Lexer::next(Token &token) {
     } else if (ch == '-') {
         token = Token(Token::MINU, content, lineno_);
     } else if (ch == '*') {
-        if (peekChar() == '*') {
-            getChar();
-            content.append(1, '*');
-            token = Token(Token::NEWTK, content, lineno_);
-        } else {
-            token = Token(Token::MULT, content, lineno_);
-        }
+        token = Token(Token::MULT, content, lineno_);
     } else if (ch == ',') {
         token = Token(Token::COMMA, content, lineno_);
     } else if (ch == '%') {

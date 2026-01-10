@@ -134,7 +134,7 @@ namespace AstNode {
     };
 
     struct MulExp : Node {
-        enum Operator { MULT, DIV, MOD, NEW };
+        enum Operator { MULT, DIV, MOD };
 
         std::unique_ptr<UnaryExp> first;
         std::vector<std::pair<Operator, std::unique_ptr<UnaryExp>>> rest;

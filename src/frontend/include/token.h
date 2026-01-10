@@ -44,8 +44,7 @@
     X(RBRACK, "]")                                                              \
     X(LBRACE, "{")                                                              \
     X(RBRACE, "}")                                                              \
-    X(EOFTK, "EOF")\
-    X(NEWTK, "**")
+    X(EOFTK, "EOF")
 
 struct Token {
     enum TokenType {
