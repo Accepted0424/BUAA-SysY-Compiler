@@ -467,11 +467,15 @@ private:
             return std::nullopt;
         }
         if (!load) return std::nullopt;
+        // Only optimize when the matched IR nodes are not reused elsewhere.
+        if (load->getUseCount() != 1) return std::nullopt;
+        if (add->getUseCount() != 1) return std::nullopt;
         if (load->getAddressOperand() != st->getAddressOperand()) {
             return std::nullopt;
         }
         auto gep = std::dynamic_pointer_cast<GetElementPtrInst>(st->getAddressOperand());
         if (!gep) return std::nullopt;
+        if (gep->getUseCount() != 2) return std::nullopt;
         const auto &indices = gep->getIndices();
         if (indices.empty()) return std::nullopt;
         for (size_t i = 0; i + 1 < indices.size(); ++i) {
