@@ -718,10 +718,12 @@ private:
         };
 
         std::vector<InstructionPtr> instList;
+        std::vector<const BasicBlock*> instBlocks;
         for (auto bbIt = func->basicBlockBegin(); bbIt != func->basicBlockEnd(); ++bbIt) {
             auto bb = *bbIt;
             for (auto instIt = bb->instructionBegin(); instIt != bb->instructionEnd(); ++instIt) {
                 instList.push_back(*instIt);
+                instBlocks.push_back(bb.get());
             }
         }
 
@@ -767,7 +769,14 @@ private:
             }
         }
 
+        const BasicBlock *prevBlock = nullptr;
         for (size_t i = 0; i < instList.size(); ++i) {
+            if (instBlocks[i] != prevBlock) {
+                // Avoid reusing value slots across basic blocks to keep loop-invariant
+                // values alive across iterations.
+                freeSlots.clear();
+                prevBlock = instBlocks[i];
+            }
             auto inst = instList[i];
             if (inst->getValueType() == ValueType::AllocaInstTy) {
                 continue;
