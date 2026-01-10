@@ -567,7 +567,7 @@ std::unique_ptr<MulExp> Parser::parseMulExp() {
 
     mulExp->first = parseUnaryExp();
 
-    while (is(Token::MULT) || is(Token::DIV) || is(Token::MOD)) {
+    while (is(Token::MULT) || is(Token::DIV) || is(Token::MOD) || is(Token::NEWTK)) {
         printNode("MulExp");
         MulExp::Operator op;
 
@@ -577,6 +577,9 @@ std::unique_ptr<MulExp> Parser::parseMulExp() {
         } else if (is(Token::DIV)) {
             op = MulExp::DIV;
             match(Token::DIV);
+        } else if (is(Token::NEWTK)) {
+            op = MulExp::NEW;
+            match(Token::NEWTK);
         } else {
             op = MulExp::MOD;
             match(Token::MOD);
@@ -601,7 +604,7 @@ std::unique_ptr<MulExp> Parser::parseMulExp(std::unique_ptr<LVal> lval) {
 
     mulExp->first = parseUnaryExp(std::move(lval));
 
-    while (is(Token::MULT) || is(Token::DIV) || is(Token::MOD)) {
+    while (is(Token::MULT) || is(Token::DIV) || is(Token::MOD) || is(Token::NEWTK)) {
         printNode("MulExp");
         MulExp::Operator op;
 
@@ -611,6 +614,9 @@ std::unique_ptr<MulExp> Parser::parseMulExp(std::unique_ptr<LVal> lval) {
         } else if (is(Token::DIV)) {
             op = MulExp::DIV;
             match(Token::DIV);
+        } else if (is(Token::NEWTK)) {
+            op = MulExp::NEW;
+            match(Token::NEWTK);
         } else {
             op = MulExp::MOD;
             match(Token::MOD);
