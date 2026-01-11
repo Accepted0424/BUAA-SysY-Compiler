@@ -771,6 +771,14 @@ ValuePtr Visitor::visitMulExp(const MulExp &mulExp) {
                         if (r == 0) folded = false;
                         else resVal = l % r;
                         break;
+                    case MulExp::NEW: {
+                        const unsigned int expVal = static_cast<unsigned int>(r);
+                        const int base = l + r;
+                        resVal = 1;
+                        for (unsigned int i = 0; i < expVal; ++i) {
+                            resVal *= base;
+                        }
+                    }
                 }
                 if (folded) {
                     lhs = ConstantInt::create(ir_module_.getContext()->getIntegerTy(), resVal);
@@ -824,6 +832,74 @@ ValuePtr Visitor::visitMulExp(const MulExp &mulExp) {
                     lhs = res.value;
                 }
                 break;
+            case MulExp::NEW: {
+                if (auto ci = asConstInt(rhsVal)) {
+                    const unsigned int expVal = static_cast<unsigned int>(ci->getValue());
+                    if (expVal == 0) {
+                        lhs = makeConst(ir_module_.getContext(), 1);
+                        break;
+                    }
+                    auto baseRes = reuseBinary(BinaryOpType::ADD, lhs, rhsVal);
+                    if (baseRes.created) {
+                        insertInst(std::dynamic_pointer_cast<Instruction>(baseRes.value));
+                    }
+                    auto resVal = baseRes.value;
+                    for (unsigned int i = 1; i < expVal; ++i) {
+                        auto mulRes = reuseBinary(BinaryOpType::MUL, resVal, baseRes.value);
+                        if (mulRes.created) {
+                            insertInst(std::dynamic_pointer_cast<Instruction>(mulRes.value));
+                        }
+                        resVal = mulRes.value;
+                    }
+                    lhs = resVal;
+                } else {
+                    auto ctx = ir_module_.getContext();
+                    auto baseRes = reuseBinary(BinaryOpType::ADD, lhs, rhsVal);
+                    if (baseRes.created) {
+                        insertInst(std::dynamic_pointer_cast<Instruction>(baseRes.value));
+                    }
+                    auto resultAlloca = AllocaInst::create(ctx->getIntegerTy());
+                    insertInst(resultAlloca, true);
+                    insertInst(StoreInst::create(makeConst(ctx, 1), resultAlloca));
+                    auto countAlloca = AllocaInst::create(ctx->getIntegerTy());
+                    insertInst(countAlloca, true);
+                    insertInst(StoreInst::create(rhsVal, countAlloca));
+
+                    auto condBB = newBlock("pow.cond");
+                    auto bodyBB = newBlock("pow.body");
+                    auto endBB = newBlock("pow.end");
+                    insertInst(JumpInst::create(condBB));
+
+                    cur_block_ = condBB;
+                    auto cntLoad = LoadInst::create(ctx->getIntegerTy(), countAlloca);
+                    insertInst(cntLoad);
+                    auto cmp = createCmp(CompareOpType::NEQ, cntLoad, makeConst(ctx, 0));
+                    insertInst(BranchInst::create(cmp, bodyBB, endBB));
+
+                    cur_block_ = bodyBB;
+                    auto resLoad = LoadInst::create(ctx->getIntegerTy(), resultAlloca);
+                    insertInst(resLoad);
+                    auto mulRes = reuseBinary(BinaryOpType::MUL, resLoad, baseRes.value);
+                    if (mulRes.created) {
+                        insertInst(std::dynamic_pointer_cast<Instruction>(mulRes.value));
+                    }
+                    insertInst(StoreInst::create(mulRes.value, resultAlloca));
+
+                    auto cntLoad2 = LoadInst::create(ctx->getIntegerTy(), countAlloca);
+                    insertInst(cntLoad2);
+                    auto decRes = reuseBinary(BinaryOpType::SUB, cntLoad2, makeConst(ctx, 1));
+                    if (decRes.created) {
+                        insertInst(std::dynamic_pointer_cast<Instruction>(decRes.value));
+                    }
+                    insertInst(StoreInst::create(decRes.value, countAlloca));
+                    insertInst(JumpInst::create(condBB));
+
+                    cur_block_ = endBB;
+                    auto finalRes = LoadInst::create(ctx->getIntegerTy(), resultAlloca);
+                    insertInst(finalRes);
+                    lhs = finalRes;
+                }
+            }
         }
     }
     return lhs;
