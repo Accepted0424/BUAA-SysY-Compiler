@@ -233,7 +233,18 @@ namespace AstNode {
     };
 
     struct ForStmt : Node {
-        std::vector<std::pair<std::unique_ptr<LVal>, std::unique_ptr<Exp>>> assigns;
+        enum Kind {
+            ASSIGN,
+            DECL
+        } kind;
+
+        struct Assign {
+            std::unique_ptr<LVal> lVal;
+            std::unique_ptr<Exp> exp;
+        } assign;
+
+        std::unique_ptr<Btype> btype;
+        std::unique_ptr<VarDef> varDef;
 
         // void print(std::ostream &out) override;
     };

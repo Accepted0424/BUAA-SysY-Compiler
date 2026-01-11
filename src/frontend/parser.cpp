@@ -829,23 +829,21 @@ std::unique_ptr<VarDecl> Parser::parseVarDecl() {
 
 /**
  * @brief 解析`for语句`
- * @note LVal '=' Exp { ',' LVal '=' Exp }
+ * @note LVal '=' Exp | BType VarDef
  */
 std::unique_ptr<ForStmt> Parser::parseForStmt() {
     auto forStmt = std::make_unique<ForStmt>();
     forStmt->lineno = cur_.lineno;
 
-    auto lValFirst = parseLVal();
-    match(Token::ASSIGN);
-    auto expFirst = parseExp();
-    forStmt->assigns.push_back({std::move(lValFirst), std::move(expFirst)});
-
-    while (is(Token::COMMA)) {
-        match(Token::COMMA);
-        auto lVal = parseLVal();
+    if (is(Token::INTTK)) {
+        forStmt->kind = ForStmt::DECL;
+        forStmt->btype = parseBType();
+        forStmt->varDef = parseVarDef();
+    } else {
+        forStmt->kind = ForStmt::ASSIGN;
+        forStmt->assign.lVal = parseLVal();
         match(Token::ASSIGN);
-        auto exp = parseExp();
-        forStmt->assigns.push_back({std::move(lVal), std::move(exp)});
+        forStmt->assign.exp = parseExp();
     }
 
     printNode("ForStmt");

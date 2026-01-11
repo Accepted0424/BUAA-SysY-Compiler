@@ -104,6 +104,7 @@ private:
     void emitLAndBranch(const LAndExp &lAndExp, const BasicBlockPtr &trueBB, const BasicBlockPtr &falseBB);
     void emitEqBranch(const EqExp &eqExp, const BasicBlockPtr &trueBB, const BasicBlockPtr &falseBB);
 
+    void visitForVarDef(const VarDef &varDef);
     void visitForStmt(const ForStmt &forStmt);
 
     bool visitStmt(const Stmt &stmt);

@@ -1259,21 +1259,134 @@ void Visitor::emitEqBranch(const EqExp &eqExp, const BasicBlockPtr &trueBB, cons
     insertInst(BranchInst::create(condVal, trueBB, falseBB));
 }
 
-void Visitor::visitForStmt(const ForStmt &forStmt) {
-    for (const auto &[lVal, exp] : forStmt.assigns) {
-        if (!cur_scope_->existInSymTable(lVal->ident->content)) {
-            ErrorReporter::error(lVal->lineno, ERR_UNDEFINED_NAME);
-            break;
-        }
-        if (cur_scope_->getSymbol(lVal->ident->content)->type == CONST_INT ||
-            cur_scope_->getSymbol(lVal->ident->content)->type == CONST_INT_ARRAY) {
-            ErrorReporter::error(forStmt.lineno, ERR_CONST_ASSIGNMENT);
-            continue;
-        }
-        auto addr = getLValAddress(*lVal);
-        auto val = loadIfPointer(visitExp(*exp));
-        insertInst(StoreInst::create(val, addr));
+void Visitor::visitForVarDef(const VarDef &varDef) {
+    auto context = ir_module_.getContext();
+    const std::string &name = varDef.ident->content;
+    const int lineno = varDef.lineno;
+
+    if (cur_scope_->existInScope(name)) {
+        ErrorReporter::error(lineno, ERR_REDEFINED_NAME);
+        return;
     }
+
+    std::shared_ptr<Symbol> symbol = nullptr;
+    const bool isArray = (varDef.constExp != nullptr);
+    const int arraySize = isArray && varDef.constExp ? visitConstExp(*varDef.constExp)->getValue() : 0;
+
+    if (cur_scope_->isGlobalScope()) {
+        if (isArray) {
+            auto type = context->getArrayTy(context->getIntegerTy(), arraySize);
+            std::vector<ConstantIntPtr> initList;
+            if (varDef.initVal && varDef.initVal->kind == InitVal::LIST) {
+                for (const auto &exp : varDef.initVal->list) {
+                    auto val = visitExp(*exp);
+                    auto ci = std::dynamic_pointer_cast<ConstantInt>(val);
+                    if (!ci) {
+                        if (auto evaluated = evalConstExpValue(*exp)) {
+                            ci = makeConst(context, *evaluated);
+                        }
+                    }
+                    if (ci) {
+                        initList.push_back(ci);
+                    }
+                }
+            }
+            if (static_cast<int>(initList.size()) > arraySize) {
+                initList.resize(arraySize);
+            }
+            while (static_cast<int>(initList.size()) < arraySize) {
+                initList.push_back(makeConst(context, 0));
+            }
+            auto initVal = ConstantArray::create(type, initList);
+            auto gv = GlobalVariable::create(type, name, initVal, false);
+            symbol = std::make_shared<IntArraySymbol>(name, gv, lineno);
+            ir_module_.addGlobalVar(gv);
+        } else {
+            ValuePtr initVal = nullptr;
+            if (varDef.initVal && varDef.initVal->kind == InitVal::EXP) {
+                auto val = visitExp(*varDef.initVal->exp);
+                auto ci = std::dynamic_pointer_cast<ConstantInt>(val);
+                if (!ci) {
+                    if (auto evaluated = evalConstExpValue(*varDef.initVal->exp)) {
+                        ci = makeConst(context, *evaluated);
+                    }
+                }
+                if (ci) {
+                    initVal = ci;
+                }
+            }
+            auto gv = GlobalVariable::create(context->getIntegerTy(), name, initVal, false);
+            symbol = std::make_shared<IntSymbol>(name, gv, lineno);
+            ir_module_.addGlobalVar(gv);
+        }
+    } else {
+        if (isArray) {
+            auto type = context->getArrayTy(context->getIntegerTy(), arraySize);
+            auto alloca = AllocaInst::create(type, name);
+            insertInst(alloca, true);
+            symbol = std::make_shared<IntArraySymbol>(name, alloca, lineno);
+            if (varDef.initVal && varDef.initVal->kind == InitVal::LIST) {
+                int idx = 0;
+                for (const auto &exp : varDef.initVal->list) {
+                    if (idx >= arraySize && arraySize > 0) break;
+                    auto val = loadIfPointer(visitExp(*exp));
+                    auto idxConst = makeConst(context, idx++);
+                    auto gep = reuseGEP(context->getIntegerTy(), alloca, {makeConst(context, 0), idxConst});
+                    if (gep.created) {
+                        insertInst(std::dynamic_pointer_cast<Instruction>(gep.value));
+                    }
+                    insertInst(StoreInst::create(val, gep.value));
+                }
+                while (idx < arraySize) {
+                    auto idxConst = makeConst(context, idx++);
+                    auto gep = reuseGEP(context->getIntegerTy(), alloca, {makeConst(context, 0), idxConst});
+                    if (gep.created) {
+                        insertInst(std::dynamic_pointer_cast<Instruction>(gep.value));
+                    }
+                    insertInst(StoreInst::create(makeConst(context, 0), gep.value));
+                }
+            }
+        } else {
+            auto alloca = AllocaInst::create(context->getIntegerTy(), name);
+            insertInst(alloca, true);
+            symbol = std::make_shared<IntSymbol>(name, alloca, lineno);
+            if (varDef.initVal && varDef.initVal->kind == InitVal::EXP) {
+                auto val = loadIfPointer(visitExp(*varDef.initVal->exp));
+                auto store = StoreInst::create(val, alloca);
+                insertInst(store);
+            }
+        }
+    }
+
+    if (symbol) {
+        cur_scope_->addSymbol(symbol);
+    }
+}
+
+void Visitor::visitForStmt(const ForStmt &forStmt) {
+    if (forStmt.kind == ForStmt::DECL) {
+        if (forStmt.varDef) {
+            visitForVarDef(*forStmt.varDef);
+        }
+        return;
+    }
+
+    if (!forStmt.assign.lVal || !forStmt.assign.exp) {
+        return;
+    }
+
+    if (!cur_scope_->existInSymTable(forStmt.assign.lVal->ident->content)) {
+        ErrorReporter::error(forStmt.assign.lVal->lineno, ERR_UNDEFINED_NAME);
+        return;
+    }
+    if (cur_scope_->getSymbol(forStmt.assign.lVal->ident->content)->type == CONST_INT ||
+        cur_scope_->getSymbol(forStmt.assign.lVal->ident->content)->type == CONST_INT_ARRAY) {
+        ErrorReporter::error(forStmt.lineno, ERR_CONST_ASSIGNMENT);
+        return;
+    }
+    auto addr = getLValAddress(*forStmt.assign.lVal);
+    auto val = loadIfPointer(visitExp(*forStmt.assign.exp));
+    insertInst(StoreInst::create(val, addr));
 }
 
 bool Visitor::visitStmt(const Stmt &stmt) {
@@ -1330,6 +1443,10 @@ bool Visitor::visitStmt(const Stmt &stmt) {
             }
             break;
         case Stmt::FOR:
+            if (stmt.forStmt.forStmtFirst &&
+                stmt.forStmt.forStmtFirst->kind == ForStmt::DECL) {
+                cur_scope_ = cur_scope_->pushScope();
+            }
             if (stmt.forStmt.forStmtFirst != nullptr) {
                 visitForStmt(*stmt.forStmt.forStmtFirst);
             }
@@ -1367,6 +1484,10 @@ bool Visitor::visitStmt(const Stmt &stmt) {
                 continueTargets_.pop_back();
 
                 cur_block_ = endBB;
+            }
+            if (stmt.forStmt.forStmtFirst &&
+                stmt.forStmt.forStmtFirst->kind == ForStmt::DECL) {
+                cur_scope_ = cur_scope_->popScope();
             }
             break;
         case Stmt::BREAK:
